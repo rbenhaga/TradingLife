@@ -115,9 +115,18 @@ class WeightedScoreEngine:
         for indicator, weight in self.weights.items():
             if indicator in signals:
                 signal_data = signals[indicator]
-                signal_value = float(signal_data.get('signal', 0))
-                confidence = float(signal_data.get('confidence', 0.5))
-                reason = signal_data.get('reason', f'{indicator} signal')
+
+                # Permettre un format simplifié: signal_data peut être un float
+                # dans ce cas on assume une confiance neutre de 0.5 et aucune
+                # raison particulière
+                if isinstance(signal_data, dict):
+                    signal_value = float(signal_data.get('signal', 0))
+                    confidence = float(signal_data.get('confidence', 0.5))
+                    reason = signal_data.get('reason', f'{indicator} signal')
+                else:
+                    signal_value = float(signal_data)
+                    confidence = 0.5
+                    reason = f'{indicator} signal'
                 
                 # Valider et limiter les valeurs
                 signal_value = np.clip(signal_value, -1, 1)

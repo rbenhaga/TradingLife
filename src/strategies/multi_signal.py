@@ -2,14 +2,12 @@
 Stratégie de trading basée sur plusieurs signaux techniques
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 import pandas as pd
 import numpy as np
 from .strategy import Strategy
-from ..core.weighted_score_engine import WeightedScoreEngine
-from ..core.logger import log_info, log_debug, log_warning
-from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
-from ..utils.helpers import calculate_position_size
+from ..core.weighted_score_engine import WeightedScoreEngine, TradingScore
+from ..core.logger import log_info
 
 class MultiSignalStrategy(Strategy):
     """Stratégie combinant plusieurs indicateurs techniques"""
@@ -94,82 +92,78 @@ class MultiSignalStrategy(Strategy):
         lower = middle - (std * std_dev)
         return upper, middle, lower
     
-    def should_enter(self, data: dict) -> Optional[Dict]:
-        """
-        Détermine si on doit entrer en position
-        
-        Args:
-            data (dict): Données de marché et indicateurs
-            
-        Returns:
-            Optional[Dict]: Dictionnaire avec le signal d'entrée ou None
-            Format: {
-                'action': 'BUY' ou 'SELL',
-                'type': 'market' ou 'limit',
-                'price': float (si limit),
-                'confidence': float (0-1),
-                'reason': str,
-                'stop_loss': float,
-                'take_profit': float
-            }
-        """
-        # Calculer le score pondéré
-        score = self.score_engine.calculate_score(data, self.indicators)
-        
-        # Conditions d'entrée
-        if score > 0.7:  # Signal d'achat fort
+    def should_enter(self, df: pd.DataFrame) -> Optional[Dict]:
+        """Détermine s'il faut entrer en position"""
+        signals = self.score_engine.analyze_indicators(df)
+        score_obj = self.score_engine.calculate_score(signals, self.symbol)
+
+        score = score_obj.total_score
+        confidence = score_obj.confidence
+        details = {s.name: {'signal': s.value,
+                            'confidence': s.confidence,
+                            'weight': s.weight,
+                            'reason': s.reason}
+                   for s in score_obj.signals}
+
+        price = df['close'].iloc[-1] if 'close' in df.columns else None
+
+        if score > 0.7:
             return {
                 'action': 'BUY',
                 'type': 'market',
-                'confidence': score,
+                'confidence': confidence,
                 'reason': "Signal d'achat fort",
-                'stop_loss': data['close'] * 0.95,  # 5% stop loss
-                'take_profit': data['close'] * 1.15  # 15% take profit
+                'stop_loss': price * 0.95 if price else None,
+                'take_profit': price * 1.15 if price else None,
+                'score': score,
+                'details': details,
             }
-        elif score > 0.5:  # Signal d'achat modéré
+        elif score > 0.5:
             return {
                 'action': 'BUY',
                 'type': 'market',
-                'confidence': score,
+                'confidence': confidence,
                 'reason': "Signal d'achat modéré",
-                'stop_loss': data['close'] * 0.97,  # 3% stop loss
-                'take_profit': data['close'] * 1.10  # 10% take profit
+                'stop_loss': price * 0.97 if price else None,
+                'take_profit': price * 1.10 if price else None,
+                'score': score,
+                'details': details,
             }
-            
+
         return None
 
-    def should_exit(self, data: dict, position: dict) -> Optional[Dict]:
-        """
-        Détermine si on doit sortir de position
-        
-        Args:
-            data (dict): Données de marché et indicateurs
-            position (dict): Informations sur la position actuelle
-            
-        Returns:
-            Optional[Dict]: Dictionnaire avec le signal de sortie ou None
-            Format: {
-                'action': 'SELL' ou 'BUY' (opposé de la position),
-                'type': 'market' ou 'limit',
-                'price': float (si limit),
-                'reason': str ('take_profit', 'stop_loss', 'signal', etc.)
-            }
-        """
-        # Calculer le score pondéré
-        score = self.score_engine.calculate_score(data, self.indicators)
-        
-        # Conditions de sortie
-        if score < -0.7:  # Signal de vente fort
+
+    def should_exit(self, df: pd.DataFrame, position: dict) -> Optional[Dict]:
+        """Détermine si on doit sortir de position"""
+        signals = self.score_engine.analyze_indicators(df)
+        score_obj = self.score_engine.calculate_score(signals, self.symbol)
+
+        score = score_obj.total_score
+        confidence = score_obj.confidence
+        details = {s.name: {'signal': s.value,
+                            'confidence': s.confidence,
+                            'weight': s.weight,
+                            'reason': s.reason}
+                   for s in score_obj.signals}
+
+        if score < -0.7:
             return {
                 'action': 'SELL' if position['side'] == 'long' else 'BUY',
                 'type': 'market',
-                'reason': "Signal de vente fort"
+                'reason': "Signal de vente fort",
+                'score': score,
+                'confidence': confidence,
+                'details': details,
             }
-        elif score < -0.5:  # Signal de vente modéré
+        elif score < -0.5:
             return {
                 'action': 'SELL' if position['side'] == 'long' else 'BUY',
                 'type': 'market',
-                'reason': "Signal de vente modéré"
+                'reason': "Signal de vente modéré",
+                'score': score,
+                'confidence': confidence,
+                'details': details,
             }
-            
+
         return None
+

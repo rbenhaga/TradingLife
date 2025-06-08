@@ -113,7 +113,9 @@ class Strategy(ABC):
                     'reason': entry_signal.get('reason', 'Signal detected'),
                     'stop_loss': entry_signal.get('stop_loss'),
                     'take_profit': entry_signal.get('take_profit'),
-                    'type': entry_signal.get('type', 'market')
+                    'type': entry_signal.get('type', 'market'),
+                    'score': entry_signal.get('score'),
+                    'details': entry_signal.get('details', {})
                 }
         
         # Si position ouverte, chercher un signal de sortie
@@ -133,7 +135,9 @@ class Strategy(ABC):
                     'action': exit_signal.get('action', 'NEUTRAL'),
                     'confidence': 1.0,  # Sortie toujours haute confiance
                     'reason': exit_signal.get('reason', 'Exit signal'),
-                    'type': exit_signal.get('type', 'market')
+                    'type': exit_signal.get('type', 'market'),
+                    'score': exit_signal.get('score'),
+                    'details': exit_signal.get('details', {})
                 }
         
         # Pas de signal
@@ -349,4 +353,4 @@ class MultiSignalStrategy(Strategy):
             'stop_loss': self.stop_loss,
             'take_profit': self.take_profit,
             'strategy': 'MultiSignal'
-        }
+        
