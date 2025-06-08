@@ -3,10 +3,12 @@ Amélioration de la classe Strategy avec les méthodes manquantes
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import logging
 from datetime import datetime
+from ..core.logger import log_info, log_debug, log_warning, log_error
+from ..core.weighted_score_engine import WeightedScoreEngine
 
 class Strategy(ABC):
     """Classe de base améliorée pour les stratégies de trading"""
@@ -82,7 +84,7 @@ class Strategy(ABC):
             }
         """
         pass
-    
+      
     def analyze(self, df: pd.DataFrame) -> Dict:
         """
         Analyse complète retournant l'état de la stratégie
@@ -104,9 +106,9 @@ class Strategy(ABC):
         # Si pas de position, chercher un signal d'entrée
         if self.current_position is None:
             entry_signal = self.should_enter(df)
-            if entry_signal:
+            if entry_signal and isinstance(entry_signal, dict):
                 return {
-                    'action': entry_signal['action'],
+                    'action': entry_signal.get('action', 'NEUTRAL'),
                     'confidence': entry_signal.get('confidence', 0.5),
                     'reason': entry_signal.get('reason', 'Signal detected'),
                     'stop_loss': entry_signal.get('stop_loss'),
@@ -126,9 +128,9 @@ class Strategy(ABC):
             }
             
             exit_signal = self.should_exit(df, position_info)
-            if exit_signal:
+            if exit_signal and isinstance(exit_signal, dict):
                 return {
-                    'action': exit_signal['action'],
+                    'action': exit_signal.get('action', 'NEUTRAL'),
                     'confidence': 1.0,  # Sortie toujours haute confiance
                     'reason': exit_signal.get('reason', 'Exit signal'),
                     'type': exit_signal.get('type', 'market')
@@ -141,7 +143,7 @@ class Strategy(ABC):
             'reason': 'No clear signal',
             'position': self.current_position
         }
-    
+
     def get_position_size(self, capital: float, current_price: float, 
                         risk_per_trade: float = 0.02) -> float:
         """
@@ -191,7 +193,6 @@ class MultiSignalStrategy(Strategy):
         super().__init__(symbol, timeframe)
         
         # Import du score engine
-        from src.core.weighted_score_engine import WeightedScoreEngine
         self.score_engine = WeightedScoreEngine(score_weights)
         
         # Paramètres de la stratégie

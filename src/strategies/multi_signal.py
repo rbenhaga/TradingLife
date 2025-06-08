@@ -2,12 +2,12 @@
 Stratégie de trading basée sur plusieurs signaux techniques
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import pandas as pd
 import numpy as np
 from .strategy import Strategy
 from ..core.weighted_score_engine import WeightedScoreEngine
-from src.core.logger import log_info, log_debug
+from ..core.logger import log_info, log_debug, log_warning
 from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 from ..utils.helpers import calculate_position_size
 
@@ -94,45 +94,82 @@ class MultiSignalStrategy(Strategy):
         lower = middle - (std * std_dev)
         return upper, middle, lower
     
-    def should_enter(self, data: dict) -> tuple:
+    def should_enter(self, data: dict) -> Optional[Dict]:
         """
-        Check if we should enter a position.
+        Détermine si on doit entrer en position
         
         Args:
-            data (dict): Market data and indicators
+            data (dict): Données de marché et indicateurs
             
         Returns:
-            tuple: (should_enter, confidence, reason)
+            Optional[Dict]: Dictionnaire avec le signal d'entrée ou None
+            Format: {
+                'action': 'BUY' ou 'SELL',
+                'type': 'market' ou 'limit',
+                'price': float (si limit),
+                'confidence': float (0-1),
+                'reason': str,
+                'stop_loss': float,
+                'take_profit': float
+            }
         """
-        # Calculate weighted score
+        # Calculer le score pondéré
         score = self.score_engine.calculate_score(data, self.indicators)
         
-        # Entry conditions
-        if score > 0.7:  # Strong buy signal
-            return True, score, "Signal d'achat fort"
-        elif score > 0.5:  # Moderate buy signal
-            return True, score, "Signal d'achat modéré"
+        # Conditions d'entrée
+        if score > 0.7:  # Signal d'achat fort
+            return {
+                'action': 'BUY',
+                'type': 'market',
+                'confidence': score,
+                'reason': "Signal d'achat fort",
+                'stop_loss': data['close'] * 0.95,  # 5% stop loss
+                'take_profit': data['close'] * 1.15  # 15% take profit
+            }
+        elif score > 0.5:  # Signal d'achat modéré
+            return {
+                'action': 'BUY',
+                'type': 'market',
+                'confidence': score,
+                'reason': "Signal d'achat modéré",
+                'stop_loss': data['close'] * 0.97,  # 3% stop loss
+                'take_profit': data['close'] * 1.10  # 10% take profit
+            }
             
-        return False, score, "Pas de signal d'achat"
+        return None
 
-    def should_exit(self, data: dict, position: dict) -> tuple:
+    def should_exit(self, data: dict, position: dict) -> Optional[Dict]:
         """
-        Check if we should exit a position.
+        Détermine si on doit sortir de position
         
         Args:
-            data (dict): Market data and indicators
-            position (dict): Current position information
+            data (dict): Données de marché et indicateurs
+            position (dict): Informations sur la position actuelle
             
         Returns:
-            tuple: (should_exit, confidence, reason)
+            Optional[Dict]: Dictionnaire avec le signal de sortie ou None
+            Format: {
+                'action': 'SELL' ou 'BUY' (opposé de la position),
+                'type': 'market' ou 'limit',
+                'price': float (si limit),
+                'reason': str ('take_profit', 'stop_loss', 'signal', etc.)
+            }
         """
-        # Calculate weighted score
+        # Calculer le score pondéré
         score = self.score_engine.calculate_score(data, self.indicators)
         
-        # Exit conditions
-        if score < -0.7:  # Strong sell signal
-            return True, abs(score), "Signal de vente fort"
-        elif score < -0.5:  # Moderate sell signal
-            return True, abs(score), "Signal de vente modéré"
+        # Conditions de sortie
+        if score < -0.7:  # Signal de vente fort
+            return {
+                'action': 'SELL' if position['side'] == 'long' else 'BUY',
+                'type': 'market',
+                'reason': "Signal de vente fort"
+            }
+        elif score < -0.5:  # Signal de vente modéré
+            return {
+                'action': 'SELL' if position['side'] == 'long' else 'BUY',
+                'type': 'market',
+                'reason': "Signal de vente modéré"
+            }
             
-        return False, abs(score), "Pas de signal de vente"
+        return None

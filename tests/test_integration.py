@@ -102,51 +102,61 @@ async def test_weighted_score_engine():
     print("⚖️ TEST DU MOTEUR DE SCORE")
     print("============================================================")
     
-    # Créer le moteur
-    engine = WeightedScoreEngine()
-    print("✅ WeightedScoreEngine créé")
-    
-    # Données de test
-    signals = {
-        'rsi': 45.0,
-        'macd': 0.5,
-        'macd_signal': 0.3,
-        'close': 50000.0,
-        'bb_upper': 51000.0,
-        'bb_lower': 49000.0,
-        'volume_ratio': 1.2
-    }
-    
-    # Configuration des indicateurs
-    indicators = {
-        'rsi': {'weight': 0.2, 'period': 14},
-        'macd': {'weight': 0.3, 'fast': 12, 'slow': 26, 'signal': 9},
-        'bollinger': {'weight': 0.3, 'period': 20, 'std': 2.0},
-        'volume': {'weight': 0.2, 'period': 20}
-    }
-    
-    # Calculer le score
-    score = engine.calculate_score(signals, indicators)
-    print(f"✅ Score calculé: {score:.3f}")
-    
-    # Vérifier le résultat
-    assert -1 <= score <= 1, "Le score doit être entre -1 et 1"
-    print("✅ Score dans la plage valide")
-    
-    # Afficher l'action recommandée
-    if score > 0.7:
-        action = "ACHAT FORT"
-    elif score > 0.3:
-        action = "ACHAT"
-    elif score < -0.7:
-        action = "VENTE FORTE"
-    elif score < -0.3:
-        action = "VENTE"
-    else:
-        action = "NEUTRAL"
-    
-    print(f"ℹ️  Action recommandée: {action}")
-    print(f"ℹ️  Confiance: {abs(score)*100:.1f}%")
+    try:
+        # Créer le moteur
+        engine = WeightedScoreEngine()
+        print("✅ WeightedScoreEngine créé")
+        
+        # Données de test
+        signals = {
+            'rsi': 45.0,
+            'macd': 0.5,
+            'macd_signal': 0.3,
+            'close': 50000.0,
+            'bb_upper': 51000.0,
+            'bb_lower': 49000.0,
+            'volume_ratio': 1.2
+        }
+        
+        # Configuration des indicateurs
+        indicators = {
+            'rsi': {'weight': 0.2, 'period': 14},
+            'macd': {'weight': 0.3, 'fast': 12, 'slow': 26, 'signal': 9},
+            'bollinger': {'weight': 0.3, 'period': 20, 'std': 2.0},
+            'volume': {'weight': 0.2, 'period': 20}
+        }
+        
+        # Calculer le score
+        score = engine.calculate_score(signals, indicators)
+        print(f"✅ Score calculé: {score:.3f}")
+        
+        # Vérifier le résultat
+        assert -1 <= score <= 1, "Le score doit être entre -1 et 1"
+        print("✅ Score dans la plage valide")
+        
+        # Afficher l'action recommandée
+        if score > 0.7:
+            action = "ACHAT FORT"
+        elif score > 0.3:
+            action = "ACHAT"
+        elif score < -0.7:
+            action = "VENTE FORTE"
+        elif score < -0.3:
+            action = "VENTE"
+        else:
+            action = "NEUTRAL"
+        
+        print(f"ℹ️  Action recommandée: {action}")
+        print(f"ℹ️  Confiance: {abs(score)*100:.1f}%")
+        
+        # CORRECTION: Retourner True pour indiquer le succès
+        return True
+        
+    except Exception as e:
+        print_error(f"Erreur: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 async def test_risk_manager():
     """Test le gestionnaire de risque"""
