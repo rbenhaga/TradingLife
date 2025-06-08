@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from datetime import datetime
 
-from src.core.logger import log_info, log_error, log_debug
+from src.logger import log_info, log_error, log_debug
 from src.strategies.strategy import Strategy
 
 class Backtester:

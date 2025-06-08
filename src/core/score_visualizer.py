@@ -7,7 +7,7 @@ from typing import Dict, List
 import json
 from datetime import datetime
 from src.core.weighted_score_engine import TradingScore
-from src.core.logger import log_info
+from src.logger import log_info
 
 class ScoreVisualizer:
     """Visualise les scores de trading pour une meilleure compréhension"""

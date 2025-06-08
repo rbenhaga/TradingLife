@@ -5,8 +5,8 @@ Stratégie de trading basée sur plusieurs signaux techniques
 from typing import Dict, Optional
 import pandas as pd
 import numpy as np
-from .strategy import Strategy
-from ..core.weighted_score_engine import WeightedScoreEngine
+from src.strategy import Strategy
+from srccore.weighted_score_engine import WeightedScoreEngine
 from src.core.logger import log_info, log_debug
 
 class MultiSignalStrategy(Strategy):

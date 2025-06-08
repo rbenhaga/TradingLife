@@ -8,9 +8,9 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from collections import defaultdict
 
-from src.core.logger import log_info, log_debug, log_warning, log_trade
-from ..strategies.multi_signal import MultiSignalStrategy
-from src.core.watchlist import DynamicWatchlist
+from src.logger import log_info, log_debug, log_warning, log_trade
+from srcstrategies.multi_signal import MultiSignalStrategy
+from src.core.watchlist_scanner import WatchlistScanner
 
 class MultiPairManager:
     """Gère le trading sur plusieurs paires simultanément"""

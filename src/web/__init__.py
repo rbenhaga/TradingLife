@@ -1,5 +1,5 @@
 """Web interface modules"""
 
-from .dashboard import create_app
+from src.dashboard import *
 
-__all__ = ['create_app']
+__all__ = ['dashboard']

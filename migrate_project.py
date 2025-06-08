@@ -53,14 +53,14 @@ def create_init_files():
         'src/__init__.py': '',
         'src/core/__init__.py': '''"""Core modules for crypto trading bot"""
 
-from .trading_bot import TradingBot
-from .weighted_score_engine import WeightedScoreEngine
-from .multi_pair_manager import MultiPairManager
-from .watchlist_scanner import WatchlistScanner
-from .backtester import Backtester
-from .weight_optimizer import WeightOptimizer
-from .market_data import MarketData
-from .risk_manager import RiskManager
+from src.trading_bot import TradingBot
+from src.weighted_score_engine import WeightedScoreEngine
+from src.multi_pair_manager import MultiPairManager
+from src.watchlist_scanner import WatchlistScanner
+from src.backtester import Backtester
+from src.weight_optimizer import WeightOptimizer
+from src.market_data import MarketData
+from src.risk_manager import RiskManager
 
 __all__ = [
     'TradingBot',
@@ -75,25 +75,25 @@ __all__ = [
 ''',
         'src/exchanges/__init__.py': '''"""Exchange connectors"""
 
-from .exchange_connector import ExchangeConnector
+from src.exchange_connector import ExchangeConnector
 
 __all__ = ['ExchangeConnector']
 ''',
         'src/strategies/__init__.py': '''"""Trading strategies"""
 
-from .strategy import Strategy, MultiSignalStrategy
-from .multi_signal import MultiSignalStrategy as MultiSignal
+from src.strategy import Strategy, MultiSignalStrategy
+from src.multi_signal import MultiSignalStrategy as MultiSignal
 
 __all__ = ['Strategy', 'MultiSignalStrategy', 'MultiSignal']
 ''',
         'src/utils/__init__.py': '''"""Utility functions"""
 
-from .helpers import *
-from .indicators import *
+from src.helpers import *
+from src.indicators import *
 ''',
         'src/web/__init__.py': '''"""Web interface modules"""
 
-from .dashboard import create_app
+from src.dashboard import create_app
 
 __all__ = ['create_app']
 ''',
@@ -117,7 +117,7 @@ def update_imports():
         # Remplacer les imports
         content = content.replace(
             'from src.core.weighted_score_engine import WeightedScoreEngine',
-            'from ..core.weighted_score_engine import WeightedScoreEngine'
+            'from srccore.weighted_score_engine import WeightedScoreEngine'
         )
         
         with open(multi_signal_path, 'w', encoding='utf-8') as f:
@@ -132,7 +132,7 @@ def update_imports():
         
         content = content.replace(
             'from src.strategies.multi_signal import MultiSignalStrategy',
-            'from ..strategies.multi_signal import MultiSignalStrategy'
+            'from srcstrategies.multi_signal import MultiSignalStrategy'
         )
         
         with open(manager_path, 'w', encoding='utf-8') as f:
