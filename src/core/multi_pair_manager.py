@@ -8,9 +8,13 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from collections import defaultdict
 
-from src.logger import log_info, log_debug, log_warning, log_trade
-from srcstrategies.multi_signal import MultiSignalStrategy
-from src.core.watchlist_scanner import WatchlistScanner
+from .logger import log_info, log_debug, log_warning, log_trade
+from .watchlist_scanner import WatchlistScanner
+from .weighted_score_engine import WeightedScoreEngine
+from .risk_manager import RiskManager
+from ..strategies.multi_signal import MultiSignalStrategy
+from ..utils.helpers import calculate_position_size
+from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
 class MultiPairManager:
     """Gère le trading sur plusieurs paires simultanément"""

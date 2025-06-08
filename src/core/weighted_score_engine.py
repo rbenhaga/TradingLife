@@ -7,6 +7,8 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 import logging
 
+logger = logging.getLogger('WeightedScoreEngine')
+
 class WeightedScoreEngine:
     """
     Moteur de calcul de score pondéré pour combiner plusieurs indicateurs
@@ -36,8 +38,7 @@ class WeightedScoreEngine:
         # Normaliser les poids pour qu'ils somment à 1
         self._normalize_weights()
         
-        self.logger = logging.getLogger('WeightedScoreEngine')
-        self.logger.info(f"Score Engine initialisé avec poids: {self.weights}")
+        logger.info(f"Score Engine initialisé avec poids: {self.weights}")
     
     def _normalize_weights(self):
         """Normalise les poids pour qu'ils somment à 1"""
@@ -45,69 +46,81 @@ class WeightedScoreEngine:
         if total > 0:
             self.weights = {k: v/total for k, v in self.weights.items()}
     
-    def calculate_score(self, signals: Dict[str, Dict]) -> Dict:
+    def calculate_score(self, data: Dict, indicators: Dict) -> float:
         """
-        Calcule le score pondéré à partir des signaux
+        Calculate weighted score from multiple indicators.
         
         Args:
-            signals: Dictionnaire des signaux par indicateur
-                    Format: {'indicator': {'signal': float, 'confidence': float}}
-        
+            data (Dict): Market data and indicator values
+            indicators (Dict): Indicator configurations with weights
+            
         Returns:
-            Dict avec score total, confidence et détails
+            float: Weighted score between -1 and 1
         """
-        if not signals:
-            return {
-                'score': 0.0,
-                'confidence': 0.0,
-                'details': {},
-                'action': 'NEUTRAL'
-            }
+        total_weight = 0
+        weighted_sum = 0
         
-        total_score = 0.0
-        total_confidence = 0.0
-        details = {}
-        
-        # Calculer le score pondéré
-        for indicator, weight in self.weights.items():
-            if indicator in signals:
-                signal_data = signals[indicator]
-                signal_value = signal_data.get('signal', 0)
-                confidence = signal_data.get('confidence', 0)
+        for indicator, config in indicators.items():
+            weight = config['weight']
+            total_weight += weight
+            
+            if indicator == 'rsi':
+                value = self._normalize_rsi(data.get('rsi', 50))
+            elif indicator == 'macd':
+                value = self._normalize_macd(data.get('macd', 0), data.get('macd_signal', 0))
+            elif indicator == 'bollinger':
+                value = self._normalize_bollinger(
+                    data.get('close', 0),
+                    data.get('bb_upper', 0),
+                    data.get('bb_lower', 0)
+                )
+            elif indicator == 'volume':
+                value = self._normalize_volume(data.get('volume_ratio', 1))
+            else:
+                continue
                 
-                # Contribution au score total
-                contribution = signal_value * weight
-                total_score += contribution
-                
-                # Moyenne pondérée de la confiance
-                total_confidence += confidence * weight
-                
-                # Détails pour le debug
-                details[indicator] = {
-                    'signal': signal_value,
-                    'confidence': confidence,
-                    'weight': weight,
-                    'contribution': contribution
-                }
-        
-        # Déterminer l'action basée sur le score
-        if total_score > 0.5:
-            action = 'STRONG_BUY'
-        elif total_score > 0.3:
-            action = 'BUY'
-        elif total_score < -0.5:
-            action = 'STRONG_SELL'
-        elif total_score < -0.3:
-            action = 'SELL'
-        else:
-            action = 'NEUTRAL'
-        
-        return {
-            'score': total_score,
-            'confidence': total_confidence,
-            'details': details,
-            'action': action
-        }
+            weighted_sum += value * weight
+            
+        if total_weight == 0:
+            return 0
+            
+        return weighted_sum / total_weight
+
+    def _normalize_rsi(self, rsi: float) -> float:
+        """Normalize RSI to [-1, 1] range"""
+        if isinstance(rsi, pd.Series):
+            rsi = rsi.iloc[-1]
+        return (rsi - 50) / 50
+
+    def _normalize_macd(self, macd: float, signal: float) -> float:
+        """Normalize MACD to [-1, 1] range"""
+        if isinstance(signal, pd.Series):
+            signal = signal.iloc[-1]
+        if isinstance(macd, pd.Series):
+            macd = macd.iloc[-1]
+            
+        if signal == 0:
+            return 0
+        return (macd - signal) / abs(signal)
+
+    def _normalize_bollinger(self, price: float, upper: float, lower: float) -> float:
+        """Normalize Bollinger Bands to [-1, 1] range"""
+        if isinstance(price, pd.Series):
+            price = price.iloc[-1]
+        if isinstance(upper, pd.Series):
+            upper = upper.iloc[-1]
+        if isinstance(lower, pd.Series):
+            lower = lower.iloc[-1]
+            
+        if upper == lower:
+            return 0
+        return (price - (upper + lower) / 2) / ((upper - lower) / 2)
+
+    def _normalize_volume(self, volume_ratio: float) -> float:
+        """Normalize volume ratio to [-1, 1] range"""
+        if isinstance(volume_ratio, pd.Series):
+            volume_ratio = volume_ratio.iloc[-1]
+        return np.clip(volume_ratio - 1, -1, 1)
     
     def analyze_indicators(self, df: pd.DataFrame) -> Dict[str, Dict]:
         """
@@ -122,7 +135,7 @@ class WeightedScoreEngine:
         signals = {}
         
         if len(df) < 20:
-            self.logger.warning("Pas assez de données pour l'analyse")
+            logger.warning("Pas assez de données pour l'analyse")
             return signals
         
         # RSI Signal
@@ -277,4 +290,4 @@ class WeightedScoreEngine:
         """
         self.weights = new_weights
         self._normalize_weights()
-        self.logger.info(f"Poids mis à jour: {self.weights}")
+        logger.info(f"Poids mis à jour: {self.weights}")

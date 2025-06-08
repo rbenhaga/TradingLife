@@ -5,9 +5,11 @@ Stratégie de trading basée sur plusieurs signaux techniques
 from typing import Dict, Optional
 import pandas as pd
 import numpy as np
-from src.strategy import Strategy
-from srccore.weighted_score_engine import WeightedScoreEngine
+from .strategy import Strategy
+from ..core.weighted_score_engine import WeightedScoreEngine
 from src.core.logger import log_info, log_debug
+from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
+from ..utils.helpers import calculate_position_size
 
 class MultiSignalStrategy(Strategy):
     """Stratégie combinant plusieurs indicateurs techniques"""
@@ -30,6 +32,13 @@ class MultiSignalStrategy(Strategy):
         self.rsi_overbought = 70  # Zone de surachat
         
         self.logger.info(f"Stratégie Multi-Signal avec score pondéré initialisée pour {symbol}")
+
+        self.indicators = {
+            'rsi': {'weight': 0.2, 'period': 14},
+            'macd': {'weight': 0.3, 'fast': 12, 'slow': 26, 'signal': 9},
+            'bollinger': {'weight': 0.3, 'period': 20, 'std': 2.0},
+            'volume': {'weight': 0.2, 'period': 20}
+        }
     
     def calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -85,50 +94,45 @@ class MultiSignalStrategy(Strategy):
         lower = middle - (std * std_dev)
         return upper, middle, lower
     
-    def should_buy(self, df: pd.DataFrame) -> bool:
+    def should_enter(self, data: dict) -> tuple:
         """
-        Détermine si on devrait acheter
+        Check if we should enter a position.
         
         Args:
-            df: DataFrame avec les données et signaux
+            data (dict): Market data and indicators
             
         Returns:
-            True si on devrait acheter
+            tuple: (should_enter, confidence, reason)
         """
-        if len(df) < 2:
-            return False
+        # Calculate weighted score
+        score = self.score_engine.calculate_score(data, self.indicators)
+        
+        # Entry conditions
+        if score > 0.7:  # Strong buy signal
+            return True, score, "Signal d'achat fort"
+        elif score > 0.5:  # Moderate buy signal
+            return True, score, "Signal d'achat modéré"
             
-        current = df.iloc[-1]
-        previous = df.iloc[-2]
-        
-        # Vérifier les conditions d'achat
-        rsi_condition = current['rsi'] < self.rsi_oversold
-        macd_condition = current['macd'] > current['macd_signal']
-        bb_condition = current['close'] < current['bb_lower']
-        score_condition = current['score'] > 0.7
-        
-        return rsi_condition and (macd_condition or bb_condition) and score_condition
-    
-    def should_sell(self, df: pd.DataFrame) -> bool:
+        return False, score, "Pas de signal d'achat"
+
+    def should_exit(self, data: dict, position: dict) -> tuple:
         """
-        Détermine si on devrait vendre
+        Check if we should exit a position.
         
         Args:
-            df: DataFrame avec les données et signaux
+            data (dict): Market data and indicators
+            position (dict): Current position information
             
         Returns:
-            True si on devrait vendre
+            tuple: (should_exit, confidence, reason)
         """
-        if len(df) < 2:
-            return False
+        # Calculate weighted score
+        score = self.score_engine.calculate_score(data, self.indicators)
+        
+        # Exit conditions
+        if score < -0.7:  # Strong sell signal
+            return True, abs(score), "Signal de vente fort"
+        elif score < -0.5:  # Moderate sell signal
+            return True, abs(score), "Signal de vente modéré"
             
-        current = df.iloc[-1]
-        previous = df.iloc[-2]
-        
-        # Vérifier les conditions de vente
-        rsi_condition = current['rsi'] > self.rsi_overbought
-        macd_condition = current['macd'] < current['macd_signal']
-        bb_condition = current['close'] > current['bb_upper']
-        score_condition = current['score'] < -0.7
-        
-        return rsi_condition and (macd_condition or bb_condition) and score_condition
+        return False, abs(score), "Pas de signal de vente"

@@ -1,5 +1,6 @@
 """Exchange connectors"""
 
-from src.exchange_connector import ExchangeConnector
+from .exchange_connector import ExchangeConnector
+from .binance import BinanceConnector
 
-__all__ = ['ExchangeConnector']
+__all__ = ['ExchangeConnector', 'BinanceConnector']

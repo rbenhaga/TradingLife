@@ -8,13 +8,15 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import ccxt
 
-from src.logger import log_info, log_error, log_debug, log_trade
-from src.multi_pair_manager import MultiPairManager
-from src.watchlist_scanner import WatchlistScanner
-from src.risk_manager import RiskManager
-from src.market_data import MarketData
-from src.exchanges.exchange_connector import ExchangeConnector
-from src.strategies.strategy import Strategy
+from .logger import log_info, log_error, log_debug, log_trade
+from .multi_pair_manager import MultiPairManager
+from .watchlist_scanner import WatchlistScanner
+from .weighted_score_engine import WeightedScoreEngine
+from .risk_manager import RiskManager
+from ..strategies.multi_signal import MultiSignalStrategy
+from ..exchanges.exchange_connector import ExchangeConnector
+from ..utils.helpers import calculate_position_size
+from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
 class TradingBot:
     """Bot de trading principal"""

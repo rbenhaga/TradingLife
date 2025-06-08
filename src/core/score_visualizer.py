@@ -6,8 +6,11 @@ Génère des représentations visuelles des scores et signaux
 from typing import Dict, List
 import json
 from datetime import datetime
-from src.core.weighted_score_engine import TradingScore
-from src.logger import log_info
+from .weighted_score_engine import TradingScore
+from .logger import log_info
+import matplotlib.pyplot as plt
+import seaborn as sns
+from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
 class ScoreVisualizer:
     """Visualise les scores de trading pour une meilleure compréhension"""

@@ -17,6 +17,10 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 from colorama import init, Fore, Style
+from src.core.weighted_score_engine import WeightedScoreEngine
+from src.core.risk_manager import RiskManager
+from src.core.market_data import MarketData
+from src.strategies.multi_signal import MultiSignalStrategy
 
 # Initialiser colorama
 init()
@@ -93,51 +97,56 @@ async def test_exchange_connector():
         return False
 
 async def test_weighted_score_engine():
-    """Test le moteur de score pondéré"""
-    print("\n" + "="*60)
+    """Test du moteur de score pondéré"""
+    print("\n============================================================")
     print("⚖️ TEST DU MOTEUR DE SCORE")
-    print("="*60)
+    print("============================================================")
     
-    try:
-        from src.core.weighted_score_engine import WeightedScoreEngine
-        
-        # Créer une instance
-        engine = WeightedScoreEngine()
-        print_success("WeightedScoreEngine créé")
-        
-        # Créer des données de test
-        df = pd.DataFrame({
-            'close': np.random.randn(100).cumsum() + 50000,
-            'volume': np.random.randint(1000000, 5000000, 100),
-            'timestamp': pd.date_range(end=datetime.now(), periods=100, freq='15min')
-        })
-        
-        # Ajouter des indicateurs factices
-        df['rsi'] = 30 + np.random.rand(100) * 40
-        df['macd'] = np.random.randn(100)
-        df['macd_signal'] = df['macd'].rolling(9).mean()
-        df['bb_upper'] = df['close'] + 1000
-        df['bb_lower'] = df['close'] - 1000
-        df['ma_fast'] = df['close'].rolling(10).mean()
-        df['ma_slow'] = df['close'].rolling(20).mean()
-        
-        # Analyser
-        signals = engine.analyze_indicators(df)
-        print_success(f"Signaux analysés: {len(signals)} indicateurs")
-        
-        # Calculer le score
-        result = engine.calculate_score(signals)
-        print_success(f"Score calculé: {result['score']:.3f}")
-        print_info(f"Action recommandée: {result['action']}")
-        print_info(f"Confiance: {result['confidence']:.1%}")
-        
-        return True
-        
-    except Exception as e:
-        print_error(f"Erreur: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+    # Créer le moteur
+    engine = WeightedScoreEngine()
+    print("✅ WeightedScoreEngine créé")
+    
+    # Données de test
+    signals = {
+        'rsi': 45.0,
+        'macd': 0.5,
+        'macd_signal': 0.3,
+        'close': 50000.0,
+        'bb_upper': 51000.0,
+        'bb_lower': 49000.0,
+        'volume_ratio': 1.2
+    }
+    
+    # Configuration des indicateurs
+    indicators = {
+        'rsi': {'weight': 0.2, 'period': 14},
+        'macd': {'weight': 0.3, 'fast': 12, 'slow': 26, 'signal': 9},
+        'bollinger': {'weight': 0.3, 'period': 20, 'std': 2.0},
+        'volume': {'weight': 0.2, 'period': 20}
+    }
+    
+    # Calculer le score
+    score = engine.calculate_score(signals, indicators)
+    print(f"✅ Score calculé: {score:.3f}")
+    
+    # Vérifier le résultat
+    assert -1 <= score <= 1, "Le score doit être entre -1 et 1"
+    print("✅ Score dans la plage valide")
+    
+    # Afficher l'action recommandée
+    if score > 0.7:
+        action = "ACHAT FORT"
+    elif score > 0.3:
+        action = "ACHAT"
+    elif score < -0.7:
+        action = "VENTE FORTE"
+    elif score < -0.3:
+        action = "VENTE"
+    else:
+        action = "NEUTRAL"
+    
+    print(f"ℹ️  Action recommandée: {action}")
+    print(f"ℹ️  Confiance: {abs(score)*100:.1f}%")
 
 async def test_risk_manager():
     """Test le gestionnaire de risque"""

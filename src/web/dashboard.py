@@ -5,6 +5,10 @@ Module pour le dashboard web
 from typing import Dict, List
 import dash
 from dash import html, dcc
+from flask import Flask, render_template, jsonify
+from ..core.trading_bot import TradingBot
+from ..core.multi_pair_manager import MultiPairManager
+from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
 class Dashboard:
     """Classe pour le dashboard web"""
