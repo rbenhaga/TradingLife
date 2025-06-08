@@ -16,4 +16,4 @@ async def main():
         log_error(f"Erreur lors du backtest: {str(e)}")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
