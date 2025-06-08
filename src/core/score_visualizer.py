@@ -187,3 +187,4 @@ class ScoreVisualizer:
         else:
             summary = ScoreVisualizer.create_mini_summary(trading_score)
             log_info(f"{symbol} - {summary}")
+
