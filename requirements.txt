@@ -51,3 +51,7 @@ autopep8==2.0.4
 # Documentation
 sphinx==7.2.6
 sphinx-rtd-theme==2.0.0
+
+# Backtesting
+vectorbt==0.24.0
+ray==2.9.0
