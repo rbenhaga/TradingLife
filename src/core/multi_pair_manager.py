@@ -9,7 +9,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from src.core.logger import log_info, log_debug, log_warning, log_trade
-from src.strategies.multi_signal import MultiSignalStrategy
+from ..strategies.multi_signal import MultiSignalStrategy
 from src.core.watchlist import DynamicWatchlist
 
 class MultiPairManager:

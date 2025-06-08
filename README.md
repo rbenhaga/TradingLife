@@ -1,30 +1,26 @@
-# Crypto Trading Bot
+# Crypto Trading Bot 🤖
 
-Un algorithme de trading automatisé pour les cryptomonnaies, conçu pour fonctionner 24/7 sur un VPS.
+Bot de trading automatisé pour cryptomonnaies avec support multi-paires et stratégies avancées.
 
-## 🚀 Caractéristiques
+## 📋 Fonctionnalités
 
 - ✅ Trading automatisé 24/7
-- ✅ Support multi-exchanges (Binance, Bybit)
-- ✅ Gestion du risque intégrée
-- ✅ Backtesting sur données historiques
+- ✅ Support multi-paires avec sélection intelligente
+- ✅ Stratégies basées sur indicateurs techniques
+- ✅ Gestion des risques (stop-loss, take-profit)
+- ✅ Mode paper trading pour tests
 - ✅ Interface web de monitoring
-- ✅ Architecture modulaire et extensible
+- ✅ Backtesting intégré
+- ✅ Optimisation des paramètres avec Optuna
 
-## 📋 Prérequis
-
-- Python 3.9+
-- Compte Binance avec API activée
-- VPS Linux (Oracle Free Tier compatible)
-
-## 🛠️ Installation
+## 🚀 Installation
 
 ```bash
 # Cloner le repository
 git clone https://github.com/yourusername/crypto-trading-bot.git
 cd crypto-trading-bot
 
-# Créer l'environnement virtuel
+# Créer un environnement virtuel
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # ou
@@ -33,84 +29,90 @@ venv\Scripts\activate  # Windows
 # Installer les dépendances
 pip install -r requirements.txt
 
-# Configurer l'environnement
+# Configurer les variables d'environnement
 cp .env.example .env
 # Éditer .env avec vos clés API
-⚙️ Configuration
+```
 
-Créer un compte Binance et générer des clés API
-Configurer les clés dans .env
-Ajuster les paramètres de risque selon votre profil
+## ⚙️ Configuration
 
-🚦 Utilisation
-bash# Test de connexion
-python scripts/test_connection.py
+1. **Clés API Exchange** : Ajoutez vos clés dans `.env`
+2. **Paramètres de trading** : Modifiez `config/config.json`
+3. **Règles de trading** : Ajustez `config/trading_rules.py`
 
-# Lancer le bot (paper trading)
-python src/main.py --paper
+## 📖 Usage
 
-# Lancer le bot (trading réel)
-python src/main.py --live
-📊 Stratégies
-Le bot implémente plusieurs stratégies :
+### Mode Paper Trading (Test)
+```bash
+python run_bot.py --paper
+```
 
-Moving Average Crossover (MA)
-RSI Oversold/Overbought
-MACD Momentum
-Custom strategies (extensible)
+### Mode Trading Réel
+```bash
+python run_bot.py --real
+```
 
-🔒 Sécurité
+### Lancer un Backtest
+```bash
+python scripts/run_backtest.py --symbol BTC/USDT --days 30
+```
 
-Clés API avec permissions limitées (pas de retrait)
-Stop-loss automatique sur chaque position
-Limite de drawdown journalier
-Logs détaillés de toutes les opérations
+### Optimiser les Paramètres
+```bash
+python scripts/optimize_weights.py --symbol BTC/USDT --trials 100
+```
 
-📝 License
-MIT License - Voir LICENSE pour plus de détails.
-🤝 Contribution
-Les contributions sont les bienvenues ! Voir CONTRIBUTING.md pour les guidelines.
+### Interface Web
+```bash
+python src/web/dashboard.py
+# Ouvrir http://localhost:5000
+```
 
-### 5. `setup.py`
-```python
-from setuptools import setup, find_packages
+## 📊 Stratégies Disponibles
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+- **Multi-Signal** : Combine RSI, MACD, Bollinger Bands, Volume
+- **Score Pondéré** : Système de scoring avec poids optimisables
+- **Volatility Scanner** : Sélection automatique des meilleures paires
 
-setup(
-    name="crypto-trading-bot",
-    version="0.1.0",
-    author="Your Name",
-    author_email="your.email@example.com",
-    description="Un algorithme de trading automatisé pour les cryptomonnaies",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/crypto-trading-bot",
-    packages=find_packages(),
-    classifiers=[
-        "Development Status :: 3 - Alpha",
-        "Intended Audience :: Financial and Insurance Industry",
-        "Topic :: Office/Business :: Financial :: Investment",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-    ],
-    python_requires=">=3.9",
-    install_requires=[
-        "ccxt>=4.1.0",
-        "pandas>=2.0.0",
-        "numpy>=1.24.0",
-        "python-dotenv>=1.0.0",
-        "sqlalchemy>=2.0.0",
-        "fastapi>=0.104.0",
-        "pandas-ta>=0.3.14b0",
-    ],
-    entry_points={
-        "console_scripts": [
-            "cryptobot=src.main:main",
-        ],
-    },
-)
+## 🛡️ Sécurité
+
+- Ne jamais partager vos clés API
+- Utiliser des clés avec permissions limitées (pas de retrait)
+- Activer la whitelist IP sur l'exchange
+- Stocker les clés dans des variables d'environnement
+
+## 📈 Performance
+
+Les performances dépendent de nombreux facteurs :
+- Conditions de marché
+- Paramètres de la stratégie
+- Gestion du risque
+- Frais de trading
+
+**Avertissement** : Le trading de cryptomonnaies comporte des risques. Ce bot est fourni à titre éducatif.
+
+## 🤝 Contribution
+
+Les contributions sont bienvenues ! Voir [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## 📄 Licence
+
+MIT License - Voir [LICENSE](LICENSE)
+
+## 🔧 Support
+
+- Documentation : [docs/](docs/)
+- Issues : [GitHub Issues](https://github.com/yourusername/crypto-trading-bot/issues)
+- Discord : [Rejoindre le serveur](https://discord.gg/xxxxx)
+
+## 🎯 Roadmap
+
+- [ ] Support multi-exchanges
+- [ ] Intégration IA/ML
+- [ ] Trading futures
+- [ ] Application mobile
+- [ ] Notifications Telegram
+
+---
+
+Développé avec ❤️ pour la communauté crypto

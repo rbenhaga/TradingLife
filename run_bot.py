@@ -1,23 +1,55 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Script de lancement simplifié du bot de trading
+Point d'entrée principal du bot de trading
 """
 
-import os
 import sys
 from pathlib import Path
 
 # Ajouter le répertoire racine au PYTHONPATH
-root_dir = Path(__file__).parent
-sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(Path(__file__).parent))
 
-# Importer et lancer le bot
-from src.main import main
+import argparse
+import logging
+from dotenv import load_dotenv
+from src.core.trading_bot import TradingBot
+
+def main():
+    # Parser d'arguments
+    parser = argparse.ArgumentParser(description='Bot de trading crypto')
+    parser.add_argument('--mode', choices=['paper', 'real'], default='paper',
+                       help='Mode de trading (paper ou real)')
+    parser.add_argument('--config', type=str, default='config/config.json',
+                       help='Fichier de configuration')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Niveau de logging')
+    
+    args = parser.parse_args()
+    
+    # Configuration du logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Charger les variables d'environnement
+    load_dotenv()
+    
+    # Créer et démarrer le bot
+    bot = TradingBot(
+        config_file=args.config,
+        paper_trading=(args.mode == 'paper')
+    )
+    
+    try:
+        bot.start()
+    except KeyboardInterrupt:
+        logging.info("Arrêt du bot...")
+        bot.stop()
+    except Exception as e:
+        logging.error(f"Erreur critique: {e}")
+        bot.stop()
+        raise
 
 if __name__ == "__main__":
-    # Créer les répertoires nécessaires
-    (root_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    (root_dir / "data" / "cache").mkdir(parents=True, exist_ok=True)
-    
-    # Lancer le bot
     main()

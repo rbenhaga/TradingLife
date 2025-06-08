@@ -1,68 +1,26 @@
 """
-Moteur de score pondéré multi-indicateurs
-Combine plusieurs signaux techniques avec des poids optimisables
+Moteur de score pondéré pour l'analyse multi-signal
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
-from datetime import datetime
-import json
-
-from src.core.logger import log_info, log_debug, log_warning
-
-@dataclass
-class Signal:
-    """Représente un signal individuel"""
-    name: str
-    value: float  # Entre -1 et 1
-    weight: float
-    confidence: float  # Entre 0 et 1
-    reason: str
-    
-    @property
-    def weighted_value(self) -> float:
-        """Valeur pondérée du signal"""
-        return self.value * self.weight * self.confidence
-
-@dataclass
-class TradingScore:
-    """Score de trading composite"""
-    total_score: float
-    direction: str  # 'BUY', 'SELL', 'NEUTRAL'
-    confidence: float
-    signals: List[Signal]
-    timestamp: datetime
-    
-    def to_dict(self) -> dict:
-        """Convertit en dictionnaire pour logging"""
-        return {
-            'total_score': self.total_score,
-            'direction': self.direction,
-            'confidence': self.confidence,
-            'timestamp': self.timestamp.isoformat(),
-            'signals': [
-                {
-                    'name': s.name,
-                    'value': s.value,
-                    'weight': s.weight,
-                    'confidence': s.confidence,
-                    'weighted_value': s.weighted_value,
-                    'reason': s.reason
-                }
-                for s in self.signals
-            ]
-        }
+from typing import Dict, Tuple, Optional
+import logging
 
 class WeightedScoreEngine:
-    """Moteur de calcul de score pondéré pour les décisions de trading"""
+    """
+    Moteur de calcul de score pondéré pour combiner plusieurs indicateurs
+    """
     
-    def __init__(self, symbol: str = 'BTC/USDT'):
-        self.symbol = symbol
+    def __init__(self, weights: Dict[str, float] = None):
+        """
+        Initialise le moteur de score
         
-        # Poids par défaut (somme = 1.0)
-        self.weights = {
+        Args:
+            weights: Poids personnalisés pour chaque indicateur
+        """
+        # Poids par défaut équilibrés
+        self.default_weights = {
             'rsi': 0.20,
             'bollinger': 0.20,
             'macd': 0.15,
@@ -72,310 +30,251 @@ class WeightedScoreEngine:
             'volatility': 0.10
         }
         
-        # Seuils de décision
-        self.buy_threshold = 0.3
-        self.strong_buy_threshold = 0.5
-        self.sell_threshold = -0.3
-        self.strong_sell_threshold = -0.5
+        # Utiliser les poids personnalisés ou les poids par défaut
+        self.weights = weights or self.default_weights
         
-        # Cache des indicateurs
-        self.indicators_cache = {}
+        # Normaliser les poids pour qu'ils somment à 1
+        self._normalize_weights()
         
-        log_info(f"Score Engine initialisé pour {symbol} avec poids: {self.weights}")
+        self.logger = logging.getLogger('WeightedScoreEngine')
+        self.logger.info(f"Score Engine initialisé avec poids: {self.weights}")
     
-    def calculate_indicators(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
-        """Calcule tous les indicateurs techniques nécessaires"""
-        
-        # RSI
-        df['rsi'] = self._calculate_rsi(df['close'], 14)
-        
-        # Bollinger Bands
-        df['bb_middle'] = df['close'].rolling(window=20).mean()
-        df['bb_std'] = df['close'].rolling(window=20).std()
-        df['bb_upper'] = df['bb_middle'] + (2 * df['bb_std'])
-        df['bb_lower'] = df['bb_middle'] - (2 * df['bb_std'])
-        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-        
-        # MACD
-        exp1 = df['close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-        df['macd_histogram'] = df['macd'] - df['macd_signal']
-        
-        # Volume
-        df['volume_sma'] = df['volume'].rolling(window=20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma']
-        
-        # Moving Averages
-        df['ma_fast'] = df['close'].rolling(window=10).mean()
-        df['ma_slow'] = df['close'].rolling(window=30).mean()
-        df['ma_diff'] = (df['ma_fast'] - df['ma_slow']) / df['ma_slow'] * 100
-        
-        # Momentum
-        df['momentum'] = df['close'].pct_change(periods=10) * 100
-        
-        # Volatility (ATR)
-        high_low = df['high'] - df['low']
-        high_close = np.abs(df['high'] - df['close'].shift())
-        low_close = np.abs(df['low'] - df['close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['atr'] = true_range.rolling(14).mean()
-        df['atr_pct'] = (df['atr'] / df['close']) * 100
-        
-        return df
+    def _normalize_weights(self):
+        """Normalise les poids pour qu'ils somment à 1"""
+        total = sum(self.weights.values())
+        if total > 0:
+            self.weights = {k: v/total for k, v in self.weights.items()}
     
-    def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
-        """Calcule le RSI"""
-        delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-    
-    def _evaluate_rsi(self, rsi: float) -> Signal:
-        """Évalue le signal RSI"""
-        if pd.isna(rsi):
-            return Signal('rsi', 0, self.weights['rsi'], 0, 'RSI non disponible')
+    def calculate_score(self, signals: Dict[str, Dict]) -> Dict:
+        """
+        Calcule le score pondéré à partir des signaux
         
-        # Zones extrêmes
-        if rsi < 20:
-            return Signal('rsi', 1.0, self.weights['rsi'], 0.9, f'RSI très survendu ({rsi:.1f})')
-        elif rsi < 30:
-            return Signal('rsi', 0.7, self.weights['rsi'], 0.8, f'RSI survendu ({rsi:.1f})')
-        elif rsi < 40:
-            return Signal('rsi', 0.3, self.weights['rsi'], 0.6, f'RSI légèrement survendu ({rsi:.1f})')
-        elif rsi > 80:
-            return Signal('rsi', -1.0, self.weights['rsi'], 0.9, f'RSI très suracheté ({rsi:.1f})')
-        elif rsi > 70:
-            return Signal('rsi', -0.7, self.weights['rsi'], 0.8, f'RSI suracheté ({rsi:.1f})')
-        elif rsi > 60:
-            return Signal('rsi', -0.3, self.weights['rsi'], 0.6, f'RSI légèrement suracheté ({rsi:.1f})')
+        Args:
+            signals: Dictionnaire des signaux par indicateur
+                    Format: {'indicator': {'signal': float, 'confidence': float}}
+        
+        Returns:
+            Dict avec score total, confidence et détails
+        """
+        if not signals:
+            return {
+                'score': 0.0,
+                'confidence': 0.0,
+                'details': {},
+                'action': 'NEUTRAL'
+            }
+        
+        total_score = 0.0
+        total_confidence = 0.0
+        details = {}
+        
+        # Calculer le score pondéré
+        for indicator, weight in self.weights.items():
+            if indicator in signals:
+                signal_data = signals[indicator]
+                signal_value = signal_data.get('signal', 0)
+                confidence = signal_data.get('confidence', 0)
+                
+                # Contribution au score total
+                contribution = signal_value * weight
+                total_score += contribution
+                
+                # Moyenne pondérée de la confiance
+                total_confidence += confidence * weight
+                
+                # Détails pour le debug
+                details[indicator] = {
+                    'signal': signal_value,
+                    'confidence': confidence,
+                    'weight': weight,
+                    'contribution': contribution
+                }
+        
+        # Déterminer l'action basée sur le score
+        if total_score > 0.5:
+            action = 'STRONG_BUY'
+        elif total_score > 0.3:
+            action = 'BUY'
+        elif total_score < -0.5:
+            action = 'STRONG_SELL'
+        elif total_score < -0.3:
+            action = 'SELL'
         else:
-            return Signal('rsi', 0, self.weights['rsi'], 0.3, f'RSI neutre ({rsi:.1f})')
-    
-    def _evaluate_bollinger(self, bb_position: float, close: float, bb_upper: float, bb_lower: float) -> Signal:
-        """Évalue le signal Bollinger Bands"""
-        if pd.isna(bb_position):
-            return Signal('bollinger', 0, self.weights['bollinger'], 0, 'Bollinger non disponible')
+            action = 'NEUTRAL'
         
-        # Position relative dans les bandes
-        if bb_position < 0:  # En dessous de la bande inférieure
-            return Signal('bollinger', 1.0, self.weights['bollinger'], 0.95, 'Prix sous bande inférieure')
-        elif bb_position < 0.2:
-            return Signal('bollinger', 0.6, self.weights['bollinger'], 0.8, 'Prix près bande inférieure')
-        elif bb_position > 1:  # Au-dessus de la bande supérieure
-            return Signal('bollinger', -1.0, self.weights['bollinger'], 0.95, 'Prix sur bande supérieure')
-        elif bb_position > 0.8:
-            return Signal('bollinger', -0.6, self.weights['bollinger'], 0.8, 'Prix près bande supérieure')
-        else:
-            confidence = 1 - abs(bb_position - 0.5) * 2  # Plus confiant aux extrêmes
-            return Signal('bollinger', 0, self.weights['bollinger'], confidence * 0.5, f'Prix centré ({bb_position:.2f})')
+        return {
+            'score': total_score,
+            'confidence': total_confidence,
+            'details': details,
+            'action': action
+        }
     
-    def _evaluate_macd(self, macd: float, signal: float, histogram: float) -> Signal:
-        """Évalue le signal MACD"""
-        if pd.isna(macd) or pd.isna(signal):
-            return Signal('macd', 0, self.weights['macd'], 0, 'MACD non disponible')
+    def analyze_indicators(self, df: pd.DataFrame) -> Dict[str, Dict]:
+        """
+        Analyse les indicateurs techniques et génère les signaux
         
-        # Croisements et divergences
-        if histogram > 0:
-            if histogram > abs(macd) * 0.1:  # Histogram significatif
-                return Signal('macd', 0.8, self.weights['macd'], 0.85, 'MACD croisement haussier fort')
+        Args:
+            df: DataFrame avec les données de marché
+        
+        Returns:
+            Dict des signaux par indicateur
+        """
+        signals = {}
+        
+        if len(df) < 20:
+            self.logger.warning("Pas assez de données pour l'analyse")
+            return signals
+        
+        # RSI Signal
+        if 'rsi' in df.columns:
+            rsi = df['rsi'].iloc[-1]
+            if pd.notna(rsi):
+                if rsi < 30:
+                    signals['rsi'] = {'signal': 1.0, 'confidence': 0.9}
+                elif rsi > 70:
+                    signals['rsi'] = {'signal': -1.0, 'confidence': 0.9}
+                else:
+                    # Signal proportionnel
+                    signal = (50 - rsi) / 50  # Positif si RSI < 50
+                    signals['rsi'] = {'signal': signal, 'confidence': 0.5}
+        
+        # Bollinger Bands Signal
+        if all(col in df.columns for col in ['close', 'bb_lower', 'bb_upper']):
+            close = df['close'].iloc[-1]
+            bb_lower = df['bb_lower'].iloc[-1]
+            bb_upper = df['bb_upper'].iloc[-1]
+            bb_middle = df['bb_middle'].iloc[-1] if 'bb_middle' in df.columns else (bb_lower + bb_upper) / 2
+            
+            if close < bb_lower:
+                signals['bollinger'] = {'signal': 1.0, 'confidence': 0.8}
+            elif close > bb_upper:
+                signals['bollinger'] = {'signal': -1.0, 'confidence': 0.8}
             else:
-                return Signal('macd', 0.4, self.weights['macd'], 0.6, 'MACD haussier')
-        else:
-            if abs(histogram) > abs(macd) * 0.1:
-                return Signal('macd', -0.8, self.weights['macd'], 0.85, 'MACD croisement baissier fort')
+                # Position relative dans les bandes
+                position = (close - bb_lower) / (bb_upper - bb_lower)
+                signal = 1 - 2 * position  # +1 en bas, -1 en haut
+                signals['bollinger'] = {'signal': signal, 'confidence': 0.5}
+        
+        # MACD Signal
+        if all(col in df.columns for col in ['macd', 'macd_signal']):
+            macd = df['macd'].iloc[-1]
+            macd_signal = df['macd_signal'].iloc[-1]
+            macd_prev = df['macd'].iloc[-2]
+            signal_prev = df['macd_signal'].iloc[-2]
+            
+            # Croisement MACD
+            if macd > macd_signal and macd_prev <= signal_prev:
+                signals['macd'] = {'signal': 1.0, 'confidence': 0.85}
+            elif macd < macd_signal and macd_prev >= signal_prev:
+                signals['macd'] = {'signal': -1.0, 'confidence': 0.85}
             else:
-                return Signal('macd', -0.4, self.weights['macd'], 0.6, 'MACD baissier')
-    
-    def _evaluate_volume(self, volume_ratio: float, price_change: float) -> Signal:
-        """Évalue le signal de volume"""
-        if pd.isna(volume_ratio):
-            return Signal('volume', 0, self.weights['volume'], 0, 'Volume non disponible')
+                # Distance relative
+                diff = (macd - macd_signal) / abs(macd_signal) if macd_signal != 0 else 0
+                signals['macd'] = {'signal': np.clip(diff * 2, -1, 1), 'confidence': 0.6}
         
-        # Volume anormal avec direction du prix
-        if volume_ratio > 2.0:
-            if price_change > 0:
-                return Signal('volume', 0.8, self.weights['volume'], 0.9, f'Volume élevé haussier ({volume_ratio:.1f}x)')
+        # Volume Signal
+        if 'volume' in df.columns:
+            recent_volume = df['volume'].iloc[-5:].mean()
+            avg_volume = df['volume'].iloc[-20:].mean()
+            
+            if recent_volume > avg_volume * 1.5:
+                # Volume élevé = confirmation de tendance
+                price_change = (df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]
+                signals['volume'] = {
+                    'signal': np.sign(price_change) * 0.8,
+                    'confidence': 0.7
+                }
             else:
-                return Signal('volume', -0.8, self.weights['volume'], 0.9, f'Volume élevé baissier ({volume_ratio:.1f}x)')
-        elif volume_ratio > 1.5:
-            if price_change > 0:
-                return Signal('volume', 0.4, self.weights['volume'], 0.7, f'Volume au-dessus moyenne ({volume_ratio:.1f}x)')
+                signals['volume'] = {'signal': 0.0, 'confidence': 0.3}
+        
+        # MA Cross Signal
+        if all(col in df.columns for col in ['ma_fast', 'ma_slow']):
+            ma_fast = df['ma_fast'].iloc[-1]
+            ma_slow = df['ma_slow'].iloc[-1]
+            ma_fast_prev = df['ma_fast'].iloc[-2]
+            ma_slow_prev = df['ma_slow'].iloc[-2]
+            
+            # Croisement des moyennes mobiles
+            if ma_fast > ma_slow and ma_fast_prev <= ma_slow_prev:
+                signals['ma_cross'] = {'signal': 1.0, 'confidence': 0.75}
+            elif ma_fast < ma_slow and ma_fast_prev >= ma_slow_prev:
+                signals['ma_cross'] = {'signal': -1.0, 'confidence': 0.75}
             else:
-                return Signal('volume', -0.4, self.weights['volume'], 0.7, f'Volume au-dessus moyenne ({volume_ratio:.1f}x)')
-        elif volume_ratio < 0.5:
-            return Signal('volume', 0, self.weights['volume'], 0.3, f'Volume faible ({volume_ratio:.1f}x)')
-        else:
-            return Signal('volume', 0, self.weights['volume'], 0.5, f'Volume normal ({volume_ratio:.1f}x)')
+                # Distance relative
+                diff = (ma_fast - ma_slow) / ma_slow if ma_slow != 0 else 0
+                signals['ma_cross'] = {'signal': np.clip(diff * 10, -1, 1), 'confidence': 0.5}
+        
+        # Momentum Signal
+        if 'close' in df.columns and len(df) >= 10:
+            momentum = (df['close'].iloc[-1] - df['close'].iloc[-10]) / df['close'].iloc[-10]
+            signals['momentum'] = {
+                'signal': np.clip(momentum * 10, -1, 1),
+                'confidence': 0.6
+            }
+        
+        # Volatility Signal (préfère les marchés volatiles mais pas trop)
+        if 'close' in df.columns and len(df) >= 20:
+            returns = df['close'].pct_change().dropna()
+            volatility = returns.iloc[-20:].std()
+            avg_volatility = returns.std()
+            
+            if 0.5 * avg_volatility < volatility < 2 * avg_volatility:
+                # Volatilité idéale pour le trading
+                signals['volatility'] = {'signal': 0.5, 'confidence': 0.7}
+            elif volatility > 2 * avg_volatility:
+                # Trop volatil = risqué
+                signals['volatility'] = {'signal': -0.3, 'confidence': 0.8}
+            else:
+                # Pas assez volatil
+                signals['volatility'] = {'signal': -0.1, 'confidence': 0.5}
+        
+        return signals
     
-    def _evaluate_ma_cross(self, ma_diff: float, ma_fast: float, ma_slow: float) -> Signal:
-        """Évalue le signal de croisement de moyennes mobiles"""
-        if pd.isna(ma_diff):
-            return Signal('ma_cross', 0, self.weights['ma_cross'], 0, 'MA non disponible')
+    def get_visual_score(self, score: float, confidence: float) -> str:
+        """
+        Retourne une représentation visuelle du score
         
-        # Force du croisement
-        if ma_diff > 2:
-            return Signal('ma_cross', 0.9, self.weights['ma_cross'], 0.85, f'MA rapide >> lente ({ma_diff:.1f}%)')
-        elif ma_diff > 0.5:
-            return Signal('ma_cross', 0.5, self.weights['ma_cross'], 0.7, f'MA rapide > lente ({ma_diff:.1f}%)')
-        elif ma_diff < -2:
-            return Signal('ma_cross', -0.9, self.weights['ma_cross'], 0.85, f'MA rapide << lente ({ma_diff:.1f}%)')
-        elif ma_diff < -0.5:
-            return Signal('ma_cross', -0.5, self.weights['ma_cross'], 0.7, f'MA rapide < lente ({ma_diff:.1f}%)')
+        Args:
+            score: Score de -1 à 1
+            confidence: Confiance de 0 à 1
+        
+        Returns:
+            String avec représentation visuelle
+        """
+        # Barre de progression
+        bar_length = 20
+        filled = int((score + 1) * bar_length / 2)
+        
+        if score > 0.5:
+            color = '🟢'
+        elif score > 0:
+            color = '🟡'
+        elif score > -0.5:
+            color = '🟠'
         else:
-            return Signal('ma_cross', 0, self.weights['ma_cross'], 0.4, f'MA proches ({ma_diff:.1f}%)')
-    
-    def _evaluate_momentum(self, momentum: float) -> Signal:
-        """Évalue le signal de momentum"""
-        if pd.isna(momentum):
-            return Signal('momentum', 0, self.weights['momentum'], 0, 'Momentum non disponible')
+            color = '🔴'
         
-        # Force du momentum
-        if momentum > 5:
-            return Signal('momentum', 0.9, self.weights['momentum'], 0.9, f'Momentum très fort ({momentum:.1f}%)')
-        elif momentum > 2:
-            return Signal('momentum', 0.5, self.weights['momentum'], 0.7, f'Momentum positif ({momentum:.1f}%)')
-        elif momentum < -5:
-            return Signal('momentum', -0.9, self.weights['momentum'], 0.9, f'Momentum très négatif ({momentum:.1f}%)')
-        elif momentum < -2:
-            return Signal('momentum', -0.5, self.weights['momentum'], 0.7, f'Momentum négatif ({momentum:.1f}%)')
+        bar = color + ' [' + '=' * filled + ' ' * (bar_length - filled) + ']'
+        
+        # Texte de confiance
+        if confidence > 0.8:
+            conf_text = "Très confiant"
+        elif confidence > 0.6:
+            conf_text = "Confiant"
+        elif confidence > 0.4:
+            conf_text = "Moyennement confiant"
         else:
-            return Signal('momentum', 0, self.weights['momentum'], 0.4, f'Momentum faible ({momentum:.1f}%)')
-    
-    def _evaluate_volatility(self, atr_pct: float, threshold: float = 2.0) -> Signal:
-        """Évalue le signal de volatilité"""
-        if pd.isna(atr_pct):
-            return Signal('volatility', 0, self.weights['volatility'], 0, 'ATR non disponible')
+            conf_text = "Peu confiant"
         
-        # Volatilité comme filtre
-        if atr_pct < 0.5:
-            return Signal('volatility', -0.5, self.weights['volatility'], 0.8, f'Volatilité trop faible ({atr_pct:.2f}%)')
-        elif atr_pct > 5:
-            return Signal('volatility', -0.3, self.weights['volatility'], 0.7, f'Volatilité excessive ({atr_pct:.2f}%)')
-        else:
-            # Volatilité idéale entre 1-3%
-            quality = 1 - abs(atr_pct - 2) / 3
-            return Signal('volatility', quality * 0.3, self.weights['volatility'], 0.6, f'Volatilité favorable ({atr_pct:.2f}%)')
-    
-    def calculate_score(self, df: pd.DataFrame) -> TradingScore:
-        """Calcule le score de trading composite"""
-        
-        # S'assurer qu'on a assez de données
-        if len(df) < 30:
-            return TradingScore(
-                total_score=0,
-                direction='NEUTRAL',
-                confidence=0,
-                signals=[],
-                timestamp=datetime.now()
-            )
-        
-        # Calculer les indicateurs
-        df = self.calculate_indicators(df)
-        last_row = df.iloc[-1]
-        prev_row = df.iloc[-2]
-        
-        # Calculer le changement de prix
-        price_change = (last_row['close'] - prev_row['close']) / prev_row['close'] * 100
-        
-        # Évaluer chaque signal
-        signals = [
-            self._evaluate_rsi(last_row['rsi']),
-            self._evaluate_bollinger(last_row['bb_position'], last_row['close'], 
-                                   last_row['bb_upper'], last_row['bb_lower']),
-            self._evaluate_macd(last_row['macd'], last_row['macd_signal'], 
-                              last_row['macd_histogram']),
-            self._evaluate_volume(last_row['volume_ratio'], price_change),
-            self._evaluate_ma_cross(last_row['ma_diff'], last_row['ma_fast'], 
-                                  last_row['ma_slow']),
-            self._evaluate_momentum(last_row['momentum']),
-            self._evaluate_volatility(last_row['atr_pct'])
-        ]
-        
-        # Calculer le score total
-        total_score = sum(signal.weighted_value for signal in signals)
-        
-        # Calculer la confidence moyenne pondérée
-        total_weight = sum(s.weight * s.confidence for s in signals)
-        total_confidence = total_weight / sum(s.weight for s in signals) if signals else 0
-        
-        # Déterminer la direction
-        if total_score >= self.strong_buy_threshold:
-            direction = 'STRONG_BUY'
-        elif total_score >= self.buy_threshold:
-            direction = 'BUY'
-        elif total_score <= self.strong_sell_threshold:
-            direction = 'STRONG_SELL'
-        elif total_score <= self.sell_threshold:
-            direction = 'SELL'
-        else:
-            direction = 'NEUTRAL'
-        
-        # Créer le score final
-        trading_score = TradingScore(
-            total_score=total_score,
-            direction=direction,
-            confidence=total_confidence,
-            signals=signals,
-            timestamp=datetime.now()
-        )
-        
-        # Logger les détails
-        log_debug(f"Score calculé pour {self.symbol}: {direction} (score={total_score:.3f}, conf={total_confidence:.2f})")
-        
-        # Logger les signaux contributeurs
-        if direction != 'NEUTRAL':
-            top_signals = sorted(signals, key=lambda s: abs(s.weighted_value), reverse=True)[:3]
-            for signal in top_signals:
-                if abs(signal.weighted_value) > 0.05:
-                    log_debug(f"  → {signal.name}: {signal.reason} (contribution: {signal.weighted_value:.3f})")
-        
-        return trading_score
+        return f"{bar} Score: {score:.3f} ({conf_text}: {confidence:.1%})"
     
     def update_weights(self, new_weights: Dict[str, float]):
-        """Met à jour les poids des indicateurs"""
-        # Vérifier que la somme fait 1.0
-        total = sum(new_weights.values())
-        if abs(total - 1.0) > 0.001:
-            # Normaliser
-            new_weights = {k: v/total for k, v in new_weights.items()}
+        """
+        Met à jour les poids des indicateurs
         
-        self.weights.update(new_weights)
-        log_info(f"Poids mis à jour: {self.weights}")
-    
-    def get_decision_explanation(self, score: TradingScore) -> str:
-        """Génère une explication lisible de la décision"""
-        if score.direction == 'NEUTRAL':
-            return "Pas de signal clair, rester en dehors du marché"
-        
-        # Trier les signaux par contribution
-        sorted_signals = sorted(score.signals, 
-                              key=lambda s: abs(s.weighted_value), 
-                              reverse=True)
-        
-        # Prendre les 3 principaux contributeurs
-        main_reasons = []
-        for signal in sorted_signals[:3]:
-            if abs(signal.weighted_value) > 0.05:
-                main_reasons.append(signal.reason)
-        
-        direction_text = {
-            'STRONG_BUY': "Signal d'achat très fort",
-            'BUY': "Signal d'achat",
-            'STRONG_SELL': "Signal de vente très fort",
-            'SELL': "Signal de vente"
-        }
-        
-        explanation = f"{direction_text.get(score.direction, score.direction)} " \
-                     f"(score: {score.total_score:.2f}, confiance: {score.confidence:.0%})\n"
-        
-        if main_reasons:
-            explanation += "Raisons principales:\n"
-            for i, reason in enumerate(main_reasons, 1):
-                explanation += f"  {i}. {reason}\n"
-        
-        return explanation
+        Args:
+            new_weights: Nouveaux poids
+        """
+        self.weights = new_weights
+        self._normalize_weights()
+        self.logger.info(f"Poids mis à jour: {self.weights}")

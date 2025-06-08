@@ -1,17 +1,19 @@
-# src/core/__init__.py
-"""Modules principaux du bot de trading"""
+"""Core modules for crypto trading bot"""
 
-from .logger import log_info, log_error, log_debug, log_warning, log_trade, log_performance
-from .watchlist import DynamicWatchlist
+from .trading_bot import TradingBot
+from .weighted_score_engine import WeightedScoreEngine
 from .multi_pair_manager import MultiPairManager
+from .watchlist_scanner import WatchlistScanner
+from .backtester import Backtester
+from .weight_optimizer import WeightOptimizer
 
 __all__ = [
-    'log_info', 
-    'log_error', 
-    'log_debug', 
-    'log_warning',
-    'log_trade',
-    'log_performance',
-    'DynamicWatchlist',
-    'MultiPairManager'
+    'TradingBot',
+    'WeightedScoreEngine',
+    'MultiPairManager',
+    'WatchlistScanner',
+    'Backtester',
+    'WeightOptimizer',
+    'MarketData',
+    'RiskManager',
 ]
