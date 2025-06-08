@@ -87,8 +87,45 @@ class WebSocketMarketFeed:
         # Cache pour réduire la latence
         self.ticker_cache: Dict[str, Dict] = {}
         self.orderbook_cache: Dict[str, OrderBookSnapshot] = {}
-        
+
         log_info(f"WebSocketMarketFeed initialisé - Exchange: {exchange}, Testnet: {testnet}")
+
+    async def fetch_snapshot(self, symbol: str, limit: int = 200) -> Optional[OrderBookSnapshot]:
+        """Récupère un snapshot initial du carnet d'ordres via l'API REST."""
+        base = "https://testnet.binance.vision" if self.testnet else "https://api.binance.com"
+        url = f"{base}/api/v3/depth"
+        params = {"symbol": symbol.upper(), "limit": limit}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=10) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+
+            bids = [[float(p), float(q)] for p, q in data.get("bids", [])]
+            asks = [[float(p), float(q)] for p, q in data.get("asks", [])]
+            snapshot = OrderBookSnapshot(
+                symbol=symbol.lower(),
+                bids=bids[:limit],
+                asks=asks[:limit],
+                timestamp=time.time(),
+                update_id=data.get("lastUpdateId", 0),
+            )
+            self.orderbook_cache[symbol.lower()] = snapshot
+            log_info(f"Snapshot récupéré pour {symbol} (update_id={snapshot.update_id})")
+            return snapshot
+        except Exception as e:
+            log_error(f"Erreur fetch_snapshot pour {symbol}: {e}")
+            return None
+
+    async def _initialize_orderbook_snapshots(self):
+        """Initialise les snapshots pour tous les symboles souscrits."""
+        tasks = []
+        for symbol, types in self.subscriptions.items():
+            if DataType.ORDERBOOK in types or DataType.DEPTH in types:
+                tasks.append(self.fetch_snapshot(symbol))
+
+        if tasks:
+            await asyncio.gather(*tasks)
     
     async def connect(self) -> bool:
         """
@@ -115,12 +152,15 @@ class WebSocketMarketFeed:
             
             self.connected = True
             self.reconnect_count = 0
-            
+
             log_info("✅ WebSocket connecté avec succès")
-            
+
+            # Récupérer les snapshots initiaux pour les carnets d'ordres
+            await self._initialize_orderbook_snapshots()
+
             # Démarrer la boucle de réception
             asyncio.create_task(self._receive_loop())
-            
+
             # Démarrer le heartbeat
             asyncio.create_task(self._heartbeat_loop())
             
@@ -202,7 +242,7 @@ class WebSocketMarketFeed:
                 elif data_type == DataType.TRADES:
                     streams.append(f"{symbol}@trade")
                 elif data_type == DataType.ORDERBOOK:
-                    streams.append(f"{symbol}@depth20@100ms")
+                    streams.append(f"{symbol}@depth@100ms")
                 elif data_type == DataType.KLINES:
                     streams.append(f"{symbol}@kline_1m")
                 elif data_type == DataType.DEPTH:
@@ -347,17 +387,19 @@ class WebSocketMarketFeed:
                 )
             
             elif stream_type and stream_type.startswith('depth'):
-                # Créer un snapshot du carnet d'ordres
-                bids = [[float(p), float(q)] for p, q in data.get('bids', [])]
-                asks = [[float(p), float(q)] for p, q in data.get('asks', [])]
-                
+                # Mise à jour ou snapshot du carnet d'ordres
+                bids_raw = data.get('bids') or data.get('b') or []
+                asks_raw = data.get('asks') or data.get('a') or []
+                bids = [[float(p), float(q)] for p, q in bids_raw]
+                asks = [[float(p), float(q)] for p, q in asks_raw]
+
                 return MarketUpdate(
                     symbol=symbol,
                     data_type=DataType.ORDERBOOK,
                     data={
-                        'bids': bids[:10],  # Top 10
-                        'asks': asks[:10],
-                        'update_id': data.get('lastUpdateId', 0)
+                        'bids': bids[:200],
+                        'asks': asks[:200],
+                        'update_id': data.get('u') or data.get('lastUpdateId', 0)
                     },
                     timestamp=timestamp,
                     latency_ms=latency_ms,
@@ -396,14 +438,34 @@ class WebSocketMarketFeed:
             self.ticker_cache[symbol] = update.data
         
         elif update.data_type == DataType.ORDERBOOK:
-            self.orderbook_cache[symbol] = OrderBookSnapshot(
-                symbol=symbol,
-                bids=update.data['bids'],
-                asks=update.data['asks'],
-                timestamp=update.timestamp,
-                update_id=update.data.get('update_id', 0)
-            )
-    
+            if symbol in self.orderbook_cache:
+                self._merge_orderbook(self.orderbook_cache[symbol], update)
+            else:
+                self.orderbook_cache[symbol] = OrderBookSnapshot(
+                    symbol=symbol,
+                    bids=update.data['bids'],
+                    asks=update.data['asks'],
+                    timestamp=update.timestamp,
+                    update_id=update.data.get('update_id', 0)
+                )
+
+    def _merge_orderbook(self, snapshot: OrderBookSnapshot, update: MarketUpdate):
+        """Fusionne une mise à jour de carnet avec le snapshot existant."""
+        def apply(levels: List[List[float]], changes: List[List[float]], reverse: bool) -> List[List[float]]:
+            book = {price: qty for price, qty in levels}
+            for price, qty in changes:
+                if qty == 0:
+                    book.pop(price, None)
+                else:
+                    book[price] = qty
+            ordered = sorted(book.items(), key=lambda x: x[0], reverse=reverse)
+            return [[p, q] for p, q in ordered[:200]]
+
+        snapshot.bids = apply(snapshot.bids, update.data['bids'], True)
+        snapshot.asks = apply(snapshot.asks, update.data['asks'], False)
+        snapshot.update_id = update.data.get('update_id', snapshot.update_id)
+        snapshot.timestamp = update.timestamp
+
     async def _dispatch_callbacks(self, symbol: str, update: MarketUpdate):
         """Appelle les callbacks enregistrés"""
         # Callbacks spécifiques au symbole
