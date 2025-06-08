@@ -12,7 +12,7 @@ class TestMarketData(unittest.TestCase):
     def setUp(self):
         """Configuration initiale"""
         pass
-    
+
     def test_data_fetching(self):
         """Test la récupération des données"""
         pass 

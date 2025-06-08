@@ -592,4 +592,4 @@ class MultiExchangeFeed:
             if await feed.connect():
                 self.feeds[exchange] = feed
                 return True
-        return False 
+        return False

@@ -12,7 +12,7 @@ class TestAnalyzer(unittest.TestCase):
     def setUp(self):
         """Configuration initiale"""
         pass
-    
+
     def test_market_analysis(self):
         """Test l'analyse de marché"""
         pass 
