@@ -12,6 +12,17 @@ import optuna
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
 
+# Optional third party libraries
+try:
+    import vectorbt as vbt  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    vbt = None
+
+try:
+    import ray  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    ray = None
+
 from .logger import log_info, log_error, log_debug
 from .weighted_score_engine import WeightedScoreEngine, TradingScore
 from ..strategies.strategy import Strategy, MultiSignalStrategy
@@ -47,7 +58,8 @@ class Backtester:
     """
     
     def __init__(self, strategy: Strategy, initial_capital: float = 10000,
-                 commission: float = 0.001, slippage: float = 0.0005):
+                 commission: float = 0.001, slippage: float = 0.0005,
+                 engine: str = "custom"):
         """
         Initialise le backtester
         
@@ -61,6 +73,7 @@ class Backtester:
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
+        self.engine = engine
         
         # État du backtest
         self.capital = initial_capital
@@ -68,11 +81,17 @@ class Backtester:
         self.trades = []
         self.equity_curve = [initial_capital]
         
-        log_info(f"Backtester initialisé - Capital: {initial_capital}, Commission: {commission*100}%")
+        log_info(
+            f"Backtester initialisé - Capital: {initial_capital}, Commission: {commission*100}% | Engine: {self.engine}"
+        )
     
-    def run(self, data: pd.DataFrame, 
-            start_date: Optional[datetime] = None,
-            end_date: Optional[datetime] = None) -> BacktestResult:
+    def run(
+        self,
+        data: pd.DataFrame,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        engine: Optional[str] = None,
+    ) -> BacktestResult:
         """
         Exécute le backtest sur les données historiques
         
@@ -90,18 +109,22 @@ class Backtester:
         if end_date:
             data = data[data.index <= end_date]
         
-        log_info(f"Début du backtest sur {len(data)} périodes")
-        
+        eng = engine or self.engine
+        log_info(f"Début du backtest sur {len(data)} périodes (engine={eng})")
+
         # Vectorisation: Précalculer tous les signaux
         signals = self._generate_signals_vectorized(data)
-        
-        # Simuler les trades
-        trades_df = self._execute_trades_vectorized(data, signals)
-        
-        # Calculer les métriques
-        result = self._calculate_metrics(trades_df)
-        
-        log_info(f"Backtest terminé - Return: {result.total_return_pct:.2f}%, Sharpe: {result.sharpe_ratio:.2f}")
+
+        if eng == "vectorbt":
+            trades_df, pf = self._execute_trades_vectorbt(data, signals)
+            result = self._calculate_metrics_vectorbt(pf)
+        else:
+            trades_df = self._execute_trades_vectorized(data, signals)
+            result = self._calculate_metrics(trades_df)
+
+        log_info(
+            f"Backtest terminé - Return: {result.total_return_pct:.2f}%, Sharpe: {result.sharpe_ratio:.2f}"
+        )
         
         return result
     
@@ -157,7 +180,7 @@ class Backtester:
         
         return signals
     
-    def _execute_trades_vectorized(self, data: pd.DataFrame, 
+    def _execute_trades_vectorized(self, data: pd.DataFrame,
                                   signals: pd.DataFrame) -> pd.DataFrame:
         """
         Exécute les trades de manière vectorisée
@@ -230,8 +253,32 @@ class Backtester:
         # Convertir en DataFrame
         trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
         self.equity_curve = pd.Series(equity_curve, index=signals.index)
-        
+
         return trades_df
+
+    def _execute_trades_vectorbt(
+        self, data: pd.DataFrame, signals: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, Any]:
+        """Execute trades using vectorbt portfolio"""
+        if vbt is None:
+            raise ImportError("vectorbt library is required for this engine")
+
+        price = data["close"]
+        entries = signals["position"] == 1
+        exits = signals["position"] == -1
+
+        pf = vbt.Portfolio.from_signals(
+            price,
+            entries,
+            exits,
+            init_cash=self.initial_capital,
+            fees=self.commission,
+            slippage=self.slippage,
+        )
+
+        self.equity_curve = pf.value()
+        trades_df = pf.trades.records_readable
+        return trades_df, pf
     
     def _calculate_metrics(self, trades_df: pd.DataFrame) -> BacktestResult:
         """
@@ -360,6 +407,76 @@ class Backtester:
             trades=trades_df,
             metrics=metrics
         )
+
+    def _calculate_metrics_vectorbt(self, pf: Any) -> BacktestResult:
+        """Calculate metrics using vectorbt Portfolio object"""
+        equity_curve = pf.value()
+
+        final_capital = equity_curve.iloc[-1]
+        total_return = final_capital - self.initial_capital
+        total_return_pct = (total_return / self.initial_capital) * 100
+
+        returns = equity_curve.pct_change().dropna()
+        sharpe_ratio = (
+            (returns.mean() / returns.std()) * np.sqrt(252 * 24)
+            if len(returns) > 0 and returns.std() > 0
+            else 0
+        )
+        downside = returns[returns < 0]
+        sortino_ratio = (
+            (returns.mean() / downside.std()) * np.sqrt(252 * 24)
+            if len(downside) > 0 and downside.std() > 0
+            else 0
+        )
+
+        max_drawdown = ((equity_curve / equity_curve.cummax()) - 1).min() * 100
+
+        trades = pf.trades
+        pnl = trades.pnl
+        total_trades = len(pnl)
+        winning_trades = (pnl > 0).sum()
+        losing_trades = (pnl <= 0).sum()
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        profit_factor = (
+            pnl[pnl > 0].sum() / abs(pnl[pnl <= 0].sum())
+            if losing_trades > 0
+            else float("inf")
+        )
+        avg_win = pnl[pnl > 0].mean() if winning_trades > 0 else 0
+        avg_loss = pnl[pnl <= 0].mean() if losing_trades > 0 else 0
+        best_trade = pnl.max() if total_trades > 0 else 0
+        worst_trade = pnl.min() if total_trades > 0 else 0
+        avg_trade_duration = trades.duration.mean() if total_trades > 0 else 0
+
+        metrics = {
+            "calmar_ratio": abs(total_return_pct / max_drawdown)
+            if max_drawdown != 0
+            else 0
+        }
+
+        return BacktestResult(
+            initial_capital=self.initial_capital,
+            final_capital=final_capital,
+            total_return=total_return,
+            total_return_pct=total_return_pct,
+            sharpe_ratio=sharpe_ratio,
+            sortino_ratio=sortino_ratio,
+            max_drawdown=max_drawdown,
+            max_drawdown_duration=0,
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            total_trades=total_trades,
+            winning_trades=int(winning_trades),
+            losing_trades=int(losing_trades),
+            avg_win=avg_win,
+            avg_loss=avg_loss,
+            best_trade=best_trade,
+            worst_trade=worst_trade,
+            avg_trade_duration=avg_trade_duration,
+            equity_curve=equity_curve,
+            trades=pf.trades.records_readable,
+            metrics=metrics,
+        )
     
     def _max_consecutive(self, trades_df: pd.DataFrame) -> int:
         """Calcule le nombre maximum de trades consécutifs"""
@@ -378,6 +495,31 @@ class Backtester:
                 consecutive = 1
         
         return max_consecutive
+
+    def run_parallel(self, data: pd.DataFrame, param_grid: List[Dict]) -> List[BacktestResult]:
+        """Execute several backtests in parallel using Ray"""
+        if ray is None:
+            raise ImportError("ray library is required for parallel execution")
+
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True)
+
+        @ray.remote
+        def _run(params: Dict) -> BacktestResult:
+            strategy = self.strategy.__class__(**params)
+            bt = Backtester(
+                strategy,
+                initial_capital=self.initial_capital,
+                commission=self.commission,
+                slippage=self.slippage,
+                engine=self.engine,
+            )
+            return bt.run(data, engine=self.engine)
+
+        futures = [_run.remote(params) for params in param_grid]
+        results = ray.get(futures)
+        ray.shutdown()
+        return results
     
     def optimize_strategy(self, data: pd.DataFrame, 
                          n_trials: int = 100,
