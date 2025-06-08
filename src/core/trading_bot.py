@@ -8,11 +8,12 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import ccxt
 
-from .logger import log_info, log_error, log_debug, log_trade
+from .logger import log_info, log_error, log_debug, log_trade, log_warning
 from .multi_pair_manager import MultiPairManager
 from .watchlist_scanner import WatchlistScanner
 from .weighted_score_engine import WeightedScoreEngine
 from .risk_manager import RiskManager
+from .market_data import MarketData
 from ..strategies.multi_signal import MultiSignalStrategy
 from ..exchanges.exchange_connector import ExchangeConnector
 from ..utils.helpers import calculate_position_size

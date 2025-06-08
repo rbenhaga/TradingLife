@@ -52,8 +52,8 @@ class ExchangeConnector:
                 }
             })
             
-            # Tester la connexion
-            await self.exchange.load_markets()
+            # Tester la connexion - load_markets n'est pas async dans ccxt
+            self.exchange.load_markets()
             self.connected = True
             
             log_info(f"Connexion réussie à {self.exchange_id}")

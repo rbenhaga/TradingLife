@@ -4,6 +4,7 @@ ccxt==4.2.15
 numpy>=2.0.0 --only-binary=numpy
 pandas>=2.2.0 --only-binary=pandas
 pandas-ta==0.3.14b0
+websockets==12.0
 
 # Database
 sqlalchemy==2.0.25
