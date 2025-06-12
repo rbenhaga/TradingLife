@@ -13,12 +13,12 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 setup(
     name="crypto-trading-bot",
     version="2.0.0",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Rayane Ben Haga",
+    author_email="rayanebenhaga@gmail.com",
     description="Bot de trading automatisé pour cryptomonnaies avec stratégies avancées",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/crypto-trading-bot",
+    url="https://github.com/TheRedFiire/TradingLife",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[
