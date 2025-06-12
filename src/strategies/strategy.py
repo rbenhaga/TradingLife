@@ -252,7 +252,7 @@ class MultiSignalStrategy(Strategy):
                 'action': 'SELL',
                 'type': 'market',
                 'confidence': confidence,
-                'reason': f"Score faible: {score:.2f}",
+                'reason': f"Score bas: {score:.2f}",
                 'stop_loss': current_price * (1 + self.stop_loss_pct),
                 'take_profit': current_price * (1 - self.take_profit_pct),
                 'score': score,
@@ -267,90 +267,89 @@ class MultiSignalStrategy(Strategy):
         
         Args:
             df: DataFrame avec les données
-            position: Informations sur la position actuelle
+            position: Dict avec les infos de la position
             
         Returns:
             Signal de sortie ou None
         """
-        current_price = position['current_price']
-        entry_price = position['entry_price']
-        side = position['side']
-        pnl_pct = position['unrealized_pnl_pct']
+        if self.current_position is None:
+            return None
         
-        # Vérifier stop loss
-        if side == 'long' and current_price <= self.stop_loss:
-            return {
-                'action': 'SELL',
-                'type': 'market',
-                'reason': 'Stop loss atteint'
-            }
-        elif side == 'short' and current_price >= self.stop_loss:
-            return {
-                'action': 'BUY',
-                'type': 'market',
-                'reason': 'Stop loss atteint'
-            }
-        
-        # Vérifier take profit
-        if side == 'long' and current_price >= self.take_profit:
-            return {
-                'action': 'SELL',
-                'type': 'market',
-                'reason': 'Take profit atteint'
-            }
-        elif side == 'short' and current_price <= self.take_profit:
-            return {
-                'action': 'BUY',
-                'type': 'market',
-                'reason': 'Take profit atteint'
-            }
-        
-        # Analyser le score actuel
+        # Analyser avec le score engine
         signals = self.score_engine.analyze_indicators(df)
         score_result = self.score_engine.calculate_score(signals)
+        
         score = score_result['score']
+        current_price = df['close'].iloc[-1]
         
-        # Sortie sur inversion de signal
-        if side == 'long' and score < self.exit_threshold:
-            return {
-                'action': 'SELL',
-                'type': 'market',
-                'reason': f'Signal inversé (score: {score:.2f})'
-            }
-        elif side == 'short' and score > -self.exit_threshold:
-            return {
-                'action': 'BUY',
-                'type': 'market',
-                'reason': f'Signal inversé (score: {score:.2f})'
-            }
+        # Vérifier stop loss et take profit
+        if self.current_position == 'LONG':
+            # Stop loss
+            if current_price <= self.stop_loss:
+                return {
+                    'action': 'SELL',
+                    'type': 'market',
+                    'reason': 'Stop loss atteint',
+                    'score': score
+                }
+            # Take profit
+            elif current_price >= self.take_profit:
+                return {
+                    'action': 'SELL',
+                    'type': 'market',
+                    'reason': 'Take profit atteint',
+                    'score': score
+                }
+            # Signal de sortie
+            elif score < self.exit_threshold:
+                return {
+                    'action': 'SELL',
+                    'type': 'market',
+                    'reason': f"Score bas: {score:.2f}",
+                    'score': score
+                }
         
-        # Trailing stop si en profit
-        if pnl_pct > 5:  # Si profit > 5%
-            # Ajuster le stop loss pour protéger les profits
-            if side == 'long':
-                new_stop = current_price * 0.97  # 3% en dessous
-                if new_stop > self.stop_loss:
-                    self.stop_loss = new_stop
-            else:  # short
-                new_stop = current_price * 1.03  # 3% au dessus
-                if new_stop < self.stop_loss:
-                    self.stop_loss = new_stop
+        elif self.current_position == 'SHORT':
+            # Stop loss
+            if current_price >= self.stop_loss:
+                return {
+                    'action': 'BUY',
+                    'type': 'market',
+                    'reason': 'Stop loss atteint',
+                    'score': score
+                }
+            # Take profit
+            elif current_price <= self.take_profit:
+                return {
+                    'action': 'BUY',
+                    'type': 'market',
+                    'reason': 'Take profit atteint',
+                    'score': score
+                }
+            # Signal de sortie
+            elif score > -self.exit_threshold:
+                return {
+                    'action': 'BUY',
+                    'type': 'market',
+                    'reason': f"Score élevé: {score:.2f}",
+                    'score': score
+                }
         
         return None
     
     def get_indicators(self) -> Dict:
         """
-        Retourne l'état actuel des indicateurs
+        Retourne les indicateurs calculés
         
         Returns:
-            Dict avec les indicateurs et l'état
+            Dict avec les indicateurs
         """
         return {
-            'symbol': self.symbol,
-            'timeframe': self.timeframe,
-            'position': self.current_position,
-            'entry_price': self.entry_price,
-            'stop_loss': self.stop_loss,
-            'take_profit': self.take_profit,
-            'strategy': 'MultiSignal'
-        
+            'rsi_oversold': self.rsi_oversold,
+            'rsi_overbought': self.rsi_overbought,
+            'entry_threshold': self.entry_threshold,
+            'exit_threshold': self.exit_threshold,
+            'stop_loss_pct': self.stop_loss_pct,
+            'take_profit_pct': self.take_profit_pct
+        }
+

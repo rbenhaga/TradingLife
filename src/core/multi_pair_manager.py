@@ -12,7 +12,7 @@ from .logger import log_info, log_debug, log_warning, log_trade
 from .watchlist_scanner import WatchlistScanner
 from .weighted_score_engine import WeightedScoreEngine
 from .risk_manager import RiskManager
-from ..strategies.multi_signal import MultiSignalStrategy
+from ..strategies.strategy import MultiSignalStrategy
 from ..utils.helpers import calculate_position_size
 from ..utils.indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
 
@@ -33,11 +33,10 @@ class MultiPairManager:
         self.paper_trading = paper_trading
         
         # Scanner de volatilité
-        self.watchlist_scanner = DynamicWatchlist(
-            exchange=exchange,
+        self.watchlist_scanner = WatchlistScanner(
+            exchange_connector=exchange,
             min_volume_usdt=5_000_000,  # 5M minimum pour commencer
-            top_n=10,
-            update_interval=1800  # 30 minutes
+            top_n=10
         )
         
         # Stratégies par paire
@@ -65,10 +64,10 @@ class MultiPairManager:
         """Initialise le gestionnaire"""
         try:
             # Scanner le marché pour la première fois
-            await self.watchlist_scanner.scan_market()
+            await self.watchlist_scanner.update_watchlist()
             
             # Créer les stratégies pour chaque paire
-            for symbol in self.watchlist_scanner.watchlist[:5]:  # Top 5 pour commencer
+            for symbol in self.watchlist_scanner.get_watchlist()[:5]:  # Top 5 pour commencer
                 self.strategies[symbol] = MultiSignalStrategy(symbol=symbol)
                 log_info(f"Stratégie créée pour {symbol}")
             
@@ -318,9 +317,9 @@ class MultiPairManager:
         old_watchlist = set(self.strategies.keys())
         
         # Scanner le marché
-        await self.watchlist_scanner.scan_market()
+        await self.watchlist_scanner.update_watchlist()
         
-        new_watchlist = set(self.watchlist_scanner.watchlist[:5])  # Top 5
+        new_watchlist = set(self.watchlist_scanner.get_watchlist()[:5])  # Top 5
         
         # Paires à ajouter
         to_add = new_watchlist - old_watchlist
@@ -335,3 +334,23 @@ class MultiPairManager:
             if symbol not in self.positions:  # Ne pas retirer si position ouverte
                 del self.strategies[symbol]
                 log_info(f"➖ Paire retirée: {symbol}")
+
+    def get_positions(self) -> Dict:
+        """
+        Retourne les positions actuelles
+        
+        Returns:
+            Dict des positions avec leurs détails
+        """
+        return {
+            symbol: {
+                'side': pos['side'],
+                'size': pos['size'],
+                'entry_price': pos['entry_price'],
+                'current_price': pos['current_price'],
+                'pnl': pos['pnl'],
+                'pnl_pct': pos['pnl_pct'],
+                'timestamp': pos['timestamp'].isoformat()
+            }
+            for symbol, pos in self.positions.items()
+        }

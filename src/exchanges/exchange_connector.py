@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Callable
 from datetime import datetime
 import time
 
-from src.core.logger import log_info, log_error, log_debug, log_warning
+from ..core.logger import log_info, log_error, log_debug, log_warning
 
 
 class ExchangeConnector:
@@ -18,18 +18,20 @@ class ExchangeConnector:
     Gestionnaire de connexion aux exchanges avec support REST et WebSocket
     """
     
-    def __init__(self, exchange_name: str = 'binance', testnet: bool = True):
+    def __init__(self, exchange_name: str = 'binance', testnet: bool = True, skip_connection: bool = False):
         """
         Initialise le connecteur d'exchange
         
         Args:
             exchange_name: Nom de l'exchange (binance, bybit, etc.)
             testnet: Utiliser le testnet
+            skip_connection: Ne pas se connecter à l'exchange (mode simulation)
         """
         self.exchange_name = exchange_name
         self.testnet = testnet
+        self.skip_connection = skip_connection
         self.exchange = None
-        self.connected = False
+        self.connected = skip_connection  # Si skip_connection, on est considéré comme connecté
         
         # Métriques
         self.api_calls = 0
@@ -37,6 +39,8 @@ class ExchangeConnector:
         self.rate_limit_remaining = 1000
         
         log_info(f"ExchangeConnector initialisé - {exchange_name} ({'testnet' if testnet else 'mainnet'})")
+        if skip_connection:
+            log_info("Mode simulation activé - Pas de connexion à l'exchange")
     
     async def connect(self, api_key: Optional[str] = None, 
                      api_secret: Optional[str] = None) -> bool:
@@ -50,6 +54,10 @@ class ExchangeConnector:
         Returns:
             True si la connexion est réussie
         """
+        if self.skip_connection:
+            log_info("Mode simulation - Pas de connexion à l'exchange")
+            return True
+            
         try:
             # Créer l'instance async de l'exchange
             exchange_class = getattr(ccxt_async, self.exchange_name)
@@ -103,6 +111,14 @@ class ExchangeConnector:
         Returns:
             Dictionnaire contenant les données du ticker
         """
+        if self.skip_connection:
+            return {
+                'symbol': symbol,
+                'last': 50000.0,  # Prix simulé
+                'bid': 49999.0,
+                'ask': 50001.0,
+                'volume': 1000.0
+            }
         return await self._api_call('fetch_ticker', symbol)
     
     async def get_ohlcv(self, symbol: str, timeframe: str = '15m', 
@@ -118,6 +134,21 @@ class ExchangeConnector:
         Returns:
             Liste des bougies OHLCV
         """
+        if self.skip_connection:
+            # Générer des données OHLCV simulées
+            now = int(time.time() * 1000)
+            data = []
+            for i in range(limit):
+                timestamp = now - (limit - i) * 15 * 60 * 1000  # 15 minutes
+                data.append([
+                    timestamp,
+                    50000.0 + i * 10,  # Open
+                    50100.0 + i * 10,  # High
+                    49900.0 + i * 10,  # Low
+                    50050.0 + i * 10,  # Close
+                    1000.0  # Volume
+                ])
+            return data
         return await self._api_call('fetch_ohlcv', symbol, timeframe, limit=limit)
     
     async def get_orderbook(self, symbol: str, limit: int = 20) -> Optional[Dict]:
@@ -131,6 +162,11 @@ class ExchangeConnector:
         Returns:
             Carnet d'ordres
         """
+        if self.skip_connection:
+            return {
+                'bids': [[50000.0 - i, 1.0] for i in range(limit)],
+                'asks': [[50000.0 + i, 1.0] for i in range(limit)]
+            }
         return await self._api_call('fetch_order_book', symbol, limit)
     
     async def get_balance(self) -> Optional[Dict]:
@@ -140,6 +176,11 @@ class ExchangeConnector:
         Returns:
             Dictionnaire des balances par devise
         """
+        if self.skip_connection:
+            return {
+                'USDT': {'free': 10000.0, 'used': 0.0, 'total': 10000.0},
+                'BTC': {'free': 1.0, 'used': 0.0, 'total': 1.0}
+            }
         return await self._api_call('fetch_balance')
     
     async def create_order(self, symbol: str, order_type: str, side: str, 
@@ -159,6 +200,26 @@ class ExchangeConnector:
         Returns:
             Détails de l'ordre créé
         """
+        if self.skip_connection:
+            order = {
+                'id': f"sim_{int(time.time() * 1000)}",
+                'symbol': symbol,
+                'type': order_type,
+                'side': side,
+                'amount': amount,
+                'price': price or 50000.0,
+                'status': 'closed',
+                'filled': amount,
+                'remaining': 0.0,
+                'cost': amount * (price or 50000.0),
+                'timestamp': int(time.time() * 1000)
+            }
+            log_info(
+                f"📝 Ordre simulé créé: {symbol} {side} {amount} @ "
+                f"{price if price else 'market'} | ID: {order['id']}"
+            )
+            return order
+            
         order = await self._api_call(
             'create_order',
             symbol=symbol,
@@ -188,6 +249,10 @@ class ExchangeConnector:
         Returns:
             True si l'ordre a été annulé
         """
+        if self.skip_connection:
+            log_info(f"❌ Ordre simulé annulé: {order_id} ({symbol})")
+            return True
+            
         result = await self._api_call('cancel_order', order_id, symbol)
         
         if result:
@@ -206,8 +271,9 @@ class ExchangeConnector:
         Returns:
             Liste des ordres ouverts
         """
-        orders = await self._api_call('fetch_open_orders', symbol)
-        return orders or []
+        if self.skip_connection:
+            return []
+        return await self._api_call('fetch_open_orders', symbol)
     
     async def get_trades(self, symbol: str, limit: int = 50) -> List[Dict]:
         """
@@ -215,17 +281,18 @@ class ExchangeConnector:
         
         Args:
             symbol: Symbole de la paire
-            limit: Nombre de trades
+            limit: Nombre de trades à récupérer
             
         Returns:
             Liste des trades
         """
-        trades = await self._api_call('fetch_my_trades', symbol, limit=limit)
-        return trades or []
+        if self.skip_connection:
+            return []
+        return await self._api_call('fetch_trades', symbol, limit=limit)
     
     async def _api_call(self, method: str, *args, **kwargs):
         """
-        Effectue un appel API avec gestion d'erreurs et rate limiting
+        Effectue un appel API avec gestion des erreurs et rate limiting
         
         Args:
             method: Nom de la méthode à appeler
@@ -233,63 +300,52 @@ class ExchangeConnector:
             **kwargs: Arguments nommés
             
         Returns:
-            Résultat de l'appel ou None en cas d'erreur
+            Résultat de l'appel API
         """
-        if not self.connected or not self.exchange:
-            log_error(f"Non connecté à l'exchange pour {method}")
+        if not self.connected:
+            log_error(f"Non connecté à {self.exchange_name}")
             return None
-        
-        # Rate limiting manuel supplémentaire
-        time_since_last = time.time() - self.last_call_time
-        if time_since_last < 0.05:  # 50ms minimum entre les appels
-            await asyncio.sleep(0.05 - time_since_last)
-        
-        max_retries = 3
-        retry_delay = 1.0
-        
-        for attempt in range(max_retries):
-            try:
-                # Appeler la méthode
-                method_func = getattr(self.exchange, method)
-                result = await method_func(*args, **kwargs)
-                
-                # Mise à jour des métriques
-                self.api_calls += 1
-                self.last_call_time = time.time()
-                
-                return result
-                
-            except ccxt.RateLimitExceeded as e:
-                log_warning(f"Rate limit atteint: {e}")
-                await asyncio.sleep(retry_delay * (attempt + 1))
-                
-            except ccxt.NetworkError as e:
-                log_error(f"Erreur réseau lors de {method}: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                else:
-                    return None
-                    
-            except ccxt.ExchangeError as e:
-                log_error(f"Erreur exchange lors de {method}: {e}")
-                return None
-                
-            except Exception as e:
-                log_error(f"Erreur inattendue lors de {method}: {e}")
-                return None
-        
-        return None
+            
+        if not self.exchange:
+            log_error(f"Exchange non initialisé")
+            return None
+            
+        try:
+            # Vérifier le rate limit
+            now = time.time()
+            if now - self.last_call_time < 0.05:  # 50ms minimum entre les appels
+                await asyncio.sleep(0.05)
+            
+            # Appel API
+            method = getattr(self.exchange, method)
+            result = await method(*args, **kwargs)
+            
+            # Mise à jour des métriques
+            self.api_calls += 1
+            self.last_call_time = time.time()
+            
+            return result
+            
+        except ccxt.NetworkError as e:
+            log_error(f"Erreur réseau: {str(e)}")
+            return None
+        except ccxt.ExchangeError as e:
+            log_error(f"Erreur exchange: {str(e)}")
+            return None
+        except Exception as e:
+            log_error(f"Erreur inattendue: {str(e)}")
+            return None
     
     async def close(self):
         """Ferme la connexion à l'exchange"""
-        if self.exchange:
+        if self.exchange and not self.skip_connection:
             await self.exchange.close()
             self.connected = False
             log_info(f"Déconnexion de {self.exchange_name}")
     
     def get_min_order_size(self, symbol: str) -> float:
         """
-        Retourne la taille minimale d'ordre pour un symbole
+        Récupère la taille minimale d'ordre pour une paire
         
         Args:
             symbol: Symbole de la paire
@@ -297,15 +353,21 @@ class ExchangeConnector:
         Returns:
             Taille minimale d'ordre
         """
-        if self.exchange and symbol in self.exchange.markets:
-            market = self.exchange.markets[symbol]
-            return market.get('limits', {}).get('amount', {}).get('min', 0.001)
-        
-        return 0.001  # Valeur par défaut
+        if self.skip_connection:
+            return 0.001  # 0.001 BTC par défaut
+            
+        if not self.exchange or not self.exchange.markets:
+            return 0.001
+            
+        market = self.exchange.markets.get(symbol)
+        if not market:
+            return 0.001
+            
+        return float(market.get('limits', {}).get('amount', {}).get('min', 0.001))
     
     def get_fee_rate(self, symbol: str, order_type: str = 'taker') -> float:
         """
-        Retourne le taux de frais pour un symbole
+        Récupère le taux de frais pour une paire
         
         Args:
             symbol: Symbole de la paire
@@ -314,8 +376,62 @@ class ExchangeConnector:
         Returns:
             Taux de frais (ex: 0.001 pour 0.1%)
         """
-        if self.exchange and symbol in self.exchange.markets:
-            market = self.exchange.markets[symbol]
-            return market.get(order_type, 0.001)
+        if self.skip_connection:
+            return 0.001  # 0.1% par défaut
+            
+        if not self.exchange or not self.exchange.markets:
+            return 0.001
+            
+        market = self.exchange.markets.get(symbol)
+        if not market:
+            return 0.001
+            
+        fees = market.get('taker' if order_type == 'taker' else 'maker', 0.001)
+        return float(fees)
+
+    async def get_tickers(self) -> Dict:
+        """
+        Récupère les tickers pour toutes les paires
         
-        return 0.001  # 0.1% par défaut
+        Returns:
+            Dict des tickers avec leurs données
+        """
+        try:
+            if self.skip_connection:
+                # Retourner des données simulées
+                return {
+                    'BTCUSDT': {
+                        'symbol': 'BTCUSDT',
+                        'price': 50000.0,
+                        'quoteVolume': 1000000000.0,
+                        'priceChangePercent': 2.5
+                    },
+                    'ETHUSDT': {
+                        'symbol': 'ETHUSDT',
+                        'price': 3000.0,
+                        'quoteVolume': 500000000.0,
+                        'priceChangePercent': 1.8
+                    }
+                }
+            
+            # Récupérer les tickers de l'exchange
+            tickers = await self.exchange.fetch_tickers()
+            
+            # Formater les données
+            formatted_tickers = {}
+            for symbol, ticker in tickers.items():
+                if not symbol.endswith('USDT'):
+                    continue
+                    
+                formatted_tickers[symbol] = {
+                    'symbol': symbol,
+                    'price': float(ticker['last']),
+                    'quoteVolume': float(ticker['quoteVolume']),
+                    'priceChangePercent': float(ticker['percentage'])
+                }
+            
+            return formatted_tickers
+            
+        except Exception as e:
+            log_error(f"Erreur lors de la récupération des tickers: {str(e)}")
+            return {}

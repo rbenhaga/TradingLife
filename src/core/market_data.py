@@ -12,6 +12,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from src.core.logger import log_info, log_debug, log_error
+from ..exchanges.exchange_connector import ExchangeConnector
 
 @dataclass
 class MarketSnapshot:
@@ -31,23 +32,25 @@ class MarketData:
     Gestionnaire centralisé des données de marché
     """
     
-    def __init__(self, exchange_connector, config: dict = None):
+    def __init__(self, exchange_connector: ExchangeConnector, config: dict):
         """
         Initialise le gestionnaire de données
         
         Args:
-            exchange_connector: Connecteur à l'exchange
-            config: Configuration optionnelle
+            exchange_connector: Connecteur d'exchange
+            config: Configuration du bot
         """
         self.exchange = exchange_connector
-        self.config = config or {}
+        self.config = config
         
         # Timeframes supportés
-        self.timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
-        self.default_timeframe = '15m'
+        self.timeframes = config.get('timeframes', ['1m', '5m', '15m', '1h', '4h', '1d'])
         
-        # Cache de données OHLCV
-        self.ohlcv_cache = defaultdict(lambda: defaultdict(pd.DataFrame))
+        # Données par paire et timeframe
+        self.data: Dict[str, Dict[str, pd.DataFrame]] = {}
+        
+        # Dernière mise à jour
+        self.last_update: Dict[str, datetime] = {}
         
         # Cache de tickers
         self.ticker_cache = {}
@@ -64,139 +67,85 @@ class MarketData:
         
         log_info(f"MarketData initialisé - Timeframes: {self.timeframes}")
     
-    async def initialize(self, symbols: List[str]):
+    async def initialize(self, pairs: List[str]):
         """
-        Initialise les données pour une liste de symboles
+        Initialise les données pour les paires spécifiées
         
         Args:
-            symbols: Liste des symboles à surveiller
+            pairs: Liste des paires à initialiser
         """
-        log_info(f"Initialisation des données pour {len(symbols)} symboles...")
-        
-        tasks = []
-        for symbol in symbols:
-            for timeframe in self.timeframes[:3]:  # Seulement 1m, 5m, 15m au départ
-                task = self._fetch_initial_data(symbol, timeframe)
-                tasks.append(task)
-        
-        # Charger en parallèle
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Compter les succès
-        success = sum(1 for r in results if not isinstance(r, Exception))
-        log_info(f"Données initiales chargées: {success}/{len(tasks)} réussies")
-        
-        # Charger le snapshot du marché
-        await self.update_market_snapshot()
+        for pair in pairs:
+            self.data[pair] = {}
+            for tf in self.timeframes:
+                await self.update_ohlcv(pair, tf)
     
-    async def _fetch_initial_data(self, symbol: str, timeframe: str):
-        """Charge les données initiales pour un symbole/timeframe"""
+    async def update_all(self):
+        """Met à jour les données pour toutes les paires et timeframes"""
         try:
-            # Déterminer le nombre de bougies selon le timeframe
-            limits = {
-                '1m': 500,
-                '5m': 500,
-                '15m': 500,
-                '1h': 500,
-                '4h': 200,
-                '1d': 100
-            }
-            limit = limits.get(timeframe, 100)
-            
-            # Récupérer les données
-            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe, limit)
-            
-            if ohlcv:
-                df = self._ohlcv_to_dataframe(ohlcv)
-                self.ohlcv_cache[symbol][timeframe] = df
-                log_debug(f"Chargé {len(df)} bougies pour {symbol} {timeframe}")
+            for pair in self.data.keys():
+                for tf in self.timeframes:
+                    await self.update_ohlcv(pair, tf)
+                    
+            log_debug("Données de marché mises à jour")
             
         except Exception as e:
-            log_error(f"Erreur chargement {symbol} {timeframe}: {str(e)}")
-            raise
+            log_error(f"Erreur lors de la mise à jour des données: {str(e)}")
     
-    def _ohlcv_to_dataframe(self, ohlcv: List) -> pd.DataFrame:
-        """Convertit les données OHLCV en DataFrame"""
-        df = pd.DataFrame(
-            ohlcv,
-            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-        )
-        
-        # Convertir timestamp en datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        
-        # S'assurer que les colonnes sont numériques
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        return df
-    
-    async def update(self, symbol: str, timeframe: Optional[str] = None):
+    async def update_ohlcv(self, symbol: str, timeframe: str):
         """
-        Met à jour les données pour un symbole
+        Met à jour les données OHLCV pour une paire et un timeframe
         
         Args:
-            symbol: Symbole à mettre à jour
-            timeframe: Timeframe spécifique ou None pour tous
+            symbol: Symbole de la paire
+            timeframe: Timeframe (1m, 5m, 15m, 1h, 4h, 1d)
         """
-        timeframes = [timeframe] if timeframe else self.timeframes[:3]  # Limiter aux TF courts
-        
-        for tf in timeframes:
-            try:
-                await self._update_single_timeframe(symbol, tf)
-            except Exception as e:
-                log_error(f"Erreur update {symbol} {tf}: {str(e)}")
+        try:
+            # Vérifier si une mise à jour est nécessaire
+            last = self.last_update.get(f"{symbol}_{timeframe}")
+            if last and datetime.now() - last < self._get_update_interval(timeframe):
+                return
+            
+            # Récupérer les données
+            ohlcv = await self.exchange.get_ohlcv(symbol, timeframe)
+            if not ohlcv:
+                return
+            
+            # Convertir en DataFrame
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            
+            # Mettre à jour les données
+            self.data[symbol][timeframe] = df
+            self.last_update[f"{symbol}_{timeframe}"] = datetime.now()
+            
+        except Exception as e:
+            log_error(f"Erreur mise à jour OHLCV {symbol} {timeframe}: {str(e)}")
     
-    async def _update_single_timeframe(self, symbol: str, timeframe: str):
-        """Met à jour un seul timeframe"""
-        # Récupérer les dernières bougies
-        limit = 10  # Dernières bougies seulement
-        ohlcv = await self.exchange.get_ohlcv(symbol, timeframe, limit)
-        
-        if not ohlcv:
-            return
-        
-        new_df = self._ohlcv_to_dataframe(ohlcv)
-        
-        # Fusionner avec le cache existant
-        if symbol in self.ohlcv_cache and timeframe in self.ohlcv_cache[symbol]:
-            existing_df = self.ohlcv_cache[symbol][timeframe]
-            
-            # Combiner et supprimer les doublons
-            combined_df = pd.concat([existing_df, new_df])
-            combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-            
-            # Limiter la taille du cache
-            if len(combined_df) > self.cache_size:
-                combined_df = combined_df.iloc[-self.cache_size:]
-            
-            self.ohlcv_cache[symbol][timeframe] = combined_df
-        else:
-            self.ohlcv_cache[symbol][timeframe] = new_df
+    def _get_update_interval(self, timeframe: str) -> timedelta:
+        """Retourne l'intervalle de mise à jour pour un timeframe"""
+        intervals = {
+            '1m': timedelta(minutes=1),
+            '5m': timedelta(minutes=5),
+            '15m': timedelta(minutes=15),
+            '1h': timedelta(hours=1),
+            '4h': timedelta(hours=4),
+            '1d': timedelta(days=1)
+        }
+        return intervals.get(timeframe, timedelta(minutes=5))
     
-    def get_ohlcv(self, symbol: str, timeframe: str, 
-                  periods: Optional[int] = None) -> pd.DataFrame:
+    def get_data(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
         """
-        Récupère les données OHLCV du cache
+        Récupère les données pour une paire et un timeframe
         
         Args:
-            symbol: Symbole
-            timeframe: Période
-            periods: Nombre de périodes (None = toutes)
+            symbol: Symbole de la paire
+            timeframe: Timeframe
             
         Returns:
-            DataFrame avec les données OHLCV
+            DataFrame avec les données ou None si non disponible
         """
-        if symbol not in self.ohlcv_cache or timeframe not in self.ohlcv_cache[symbol]:
-            return pd.DataFrame()
-        
-        df = self.ohlcv_cache[symbol][timeframe]
-        
-        if periods and len(df) > periods:
-            return df.iloc[-periods:].copy()
-        
-        return df.copy()
+        return self.data.get(symbol, {}).get(timeframe)
     
     async def get_ticker(self, symbol: str) -> Optional[Dict]:
         """
@@ -234,8 +183,8 @@ class MarketData:
         Returns:
             Dict avec tous les indicateurs
         """
-        timeframe = timeframe or self.default_timeframe
-        df = self.get_ohlcv(symbol, timeframe)
+        timeframe = timeframe or self.timeframes[0]
+        df = self.get_data(symbol, timeframe)
         
         if len(df) < 50:
             return {}
@@ -494,12 +443,12 @@ class MarketData:
     
     def cleanup_old_data(self):
         """Nettoie les données trop anciennes du cache"""
-        for symbol in list(self.ohlcv_cache.keys()):
-            for timeframe in list(self.ohlcv_cache[symbol].keys()):
-                df = self.ohlcv_cache[symbol][timeframe]
+        for symbol in list(self.data.keys()):
+            for timeframe in list(self.data[symbol].keys()):
+                df = self.data[symbol][timeframe]
                 
                 if len(df) > self.cache_size:
                     # Garder seulement les N dernières bougies
-                    self.ohlcv_cache[symbol][timeframe] = df.iloc[-self.cache_size:]
+                    self.data[symbol][timeframe] = df.iloc[-self.cache_size:]
         
         log_debug("Nettoyage du cache de données terminé")

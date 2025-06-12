@@ -1,6 +1,5 @@
 """Trading strategies"""
 
-from .strategy import Strategy
-from .multi_signal import MultiSignalStrategy
+from .strategy import Strategy, MultiSignalStrategy
 
 __all__ = ['Strategy', 'MultiSignalStrategy']

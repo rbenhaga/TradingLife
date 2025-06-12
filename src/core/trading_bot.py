@@ -21,9 +21,9 @@ from .weighted_score_engine import WeightedScoreEngine
 from .risk_manager import RiskManager
 from .market_data import MarketData
 from .websocket_market_feed import WebSocketMarketFeed, DataType, MarketUpdate
-from ..strategies.multi_signal import MultiSignalStrategy
+from ..strategies.strategy import MultiSignalStrategy
 from ..exchanges.exchange_connector import ExchangeConnector
-from ..config.settings import load_config, validate_config
+from config.settings import load_config, validate_config
 
 
 class BotState(Enum):
@@ -133,7 +133,8 @@ class TradingBot:
             # 1. Exchange connector
             self.exchange = ExchangeConnector(
                 exchange_name=self.config['exchange']['name'],
-                testnet=self.config['exchange']['testnet']
+                testnet=self.config['exchange']['testnet'],
+                skip_connection=self.config['exchange'].get('skip_connection', False)
             )
             
             if not await self.exchange.connect(
@@ -222,7 +223,7 @@ class TradingBot:
                 self.market_data._update_orderbook(update.symbol, update.data)
             
             # Vérifier la latence
-            if update.latency_ms > 100:
+            if update.latency_ms > 200:
                 log_warning(f"Latence élevée détectée: {update.latency_ms:.1f}ms sur {update.symbol}")
             
             # Incrémenter les métriques
@@ -253,7 +254,7 @@ class TradingBot:
         
         # Créer les tâches parallèles
         tasks = [
-            self._create_monitored_task(self._market_scanner_loop(), "Scanner"),
+            self._create_monitored_task(self._market_scanner_task(), "Scanner"),
             self._create_monitored_task(self._strategy_loop(), "Strategy"),
             self._create_monitored_task(self._risk_monitor_loop(), "Risk Monitor"),
             self._create_monitored_task(self._performance_tracker_loop(), "Performance"),
@@ -286,31 +287,24 @@ class TradingBot:
         task.add_done_callback(lambda t: self._tasks.discard(t))
         return task
     
-    async def _market_scanner_loop(self):
-        """Boucle de scan du marché"""
-        interval = self.config.get('scanner_interval', 300)  # 5 minutes par défaut
-        
-        while self.status.state == BotState.RUNNING:
+    async def _market_scanner_task(self):
+        """Tâche de scan du marché"""
+        while not self._shutdown_event.is_set():
             try:
-                # Scanner le marché
                 log_debug("Scan du marché en cours...")
-                new_pairs = await self.watchlist_scanner.scan_market()
                 
-                if new_pairs:
-                    # Mettre à jour les paires surveillées
-                    current_pairs = set(self.pair_manager.strategies.keys())
-                    to_add = set(new_pairs[:5]) - current_pairs  # Top 5 seulement
-                    
-                    for symbol in to_add:
-                        log_info(f"Ajout de {symbol} à la watchlist")
-                        await self._add_pair_to_watch(symbol)
+                # Mettre à jour la watchlist
+                await self.watchlist_scanner.update_watchlist()
+                
+                # Mettre à jour les données de marché
+                await self.market_data.update_all()
                 
                 # Attendre avant le prochain scan
-                await asyncio.sleep(interval)
+                await asyncio.sleep(self.config['trading'].get('scan_interval', 300))
                 
             except Exception as e:
                 log_error(f"Erreur dans market scanner: {str(e)}")
-                await asyncio.sleep(30)  # Attendre avant de réessayer
+                await asyncio.sleep(60)  # Attendre 1 minute en cas d'erreur
     
     async def _strategy_loop(self):
         """Boucle d'exécution des stratégies"""
@@ -509,45 +503,41 @@ class TradingBot:
             self._last_daily_reset = now
     
     async def _save_state(self):
-        """Sauvegarde l'état du bot"""
+        """Sauvegarde l'état actuel du bot"""
         try:
-            state_file = Path(self.config.get('state_file', 'data/bot_state.json'))
-            state_file.parent.mkdir(parents=True, exist_ok=True)
-            
+            if not self.pair_manager:
+                return
+                
             state = {
                 'timestamp': datetime.now().isoformat(),
-                'status': {
-                    'state': self.status.state.value,
-                    'total_trades': self.status.total_trades,
-                    'total_pnl': self.status.total_pnl,
-                    'open_positions': self.status.open_positions
-                },
-                'positions': self.pair_manager.positions,
-                'performance': dict(self.pair_manager.performance)
+                'state': self.status.state.value,
+                'total_trades': self.status.total_trades,
+                'open_positions': self.status.open_positions,
+                'total_pnl': self.status.total_pnl,
+                'daily_pnl': self.status.daily_pnl,
+                'positions': self.pair_manager.get_positions(),
+                'errors': self.status.errors[-10:]  # Garder les 10 dernières erreurs
             }
             
+            state_file = Path('data/bot_state.json')
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(state_file, 'w') as f:
-                json.dump(state, f, indent=2, default=str)
+                json.dump(state, f, indent=2)
+                
+            log_debug("État du bot sauvegardé")
             
         except Exception as e:
             log_error(f"Erreur sauvegarde état: {str(e)}")
     
     async def shutdown(self):
         """Arrête proprement le bot"""
-        if self.status.state == BotState.STOPPING:
-            return
-        
-        log_info("🛑 Arrêt du bot en cours...")
-        self.status.state = BotState.STOPPING
-        
         try:
-            # Annuler toutes les tâches
-            for task in self._tasks:
-                if not task.done():
-                    task.cancel()
+            log_info("🛑 Arrêt du bot en cours...")
+            self.status.state = BotState.STOPPING
             
-            if self._tasks:
-                await asyncio.gather(*self._tasks, return_exceptions=True)
+            # Sauvegarder l'état final
+            await self._save_state()
             
             # Fermer les connexions
             if self.websocket_feed:
@@ -556,14 +546,12 @@ class TradingBot:
             if self.exchange:
                 await self.exchange.close()
             
-            # Sauvegarder l'état final
-            await self._save_state()
-            
             self.status.state = BotState.STOPPED
             log_info("✅ Bot arrêté proprement")
             
         except Exception as e:
             log_error(f"Erreur lors de l'arrêt: {str(e)}")
+            self.status.state = BotState.ERROR
         finally:
             self._shutdown_event.set()
     
