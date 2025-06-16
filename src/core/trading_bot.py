@@ -13,6 +13,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 import os
+import traceback
 
 from .logger import log_info, log_error, log_debug, log_warning, log_trade
 from .multi_pair_manager import MultiPairManager
@@ -108,7 +109,8 @@ class TradingBot:
             return config
             
         except Exception as e:
-            log_error(f"Erreur lors du chargement de la config: {str(e)}")
+            tb = traceback.format_exc()
+            log_error(f"Erreur lors du chargement de la config: {str(e)}\nTraceback:\n{tb}")
             raise
     
     def _setup_signal_handlers(self):
@@ -143,14 +145,28 @@ class TradingBot:
             ):
                 raise Exception("Échec de connexion à l'exchange")
             
-            # 2. WebSocket feed
-            self.websocket_feed = WebSocketMarketFeed(
-                exchange=self.config['exchange']['name'],
-                testnet=self.config['exchange']['testnet']
-            )
+            # 2. WebSocket feed avec configuration
+            ws_config = self.config.get('websocket', {})
+            log_info(f"Configuration WebSocket: {ws_config}")
             
-            if not await self.websocket_feed.connect():
-                raise Exception("Échec de connexion WebSocket")
+            try:
+                self.websocket_feed = WebSocketMarketFeed(
+                    exchange=self.config['exchange']['name'],
+                    testnet=self.config['exchange']['testnet'],
+                    max_reconnect_attempts=ws_config.get('max_reconnect_attempts', 5)
+                )
+                
+                # Configurer les paramètres WebSocket
+                self.websocket_feed.heartbeat_timeout = ws_config.get('heartbeat_timeout', 30)
+                
+                if not await self.websocket_feed.connect():
+                    raise Exception("Échec de connexion WebSocket")
+                
+                log_info("WebSocket feed initialisé avec succès")
+                
+            except Exception as e:
+                log_error(f"Erreur lors de l'initialisation du WebSocket feed: {str(e)}")
+                raise
             
             # 3. Risk Manager
             self.risk_manager = RiskManager(self.config['risk_management'])
@@ -180,7 +196,11 @@ class TradingBot:
             await self.market_data.initialize(initial_pairs)
             
             # S'abonner aux flux WebSocket
-            await self._setup_websocket_subscriptions(initial_pairs)
+            try:
+                await self._setup_websocket_subscriptions(initial_pairs)
+            except Exception as e:
+                log_error(f"Erreur lors de la configuration des abonnements WebSocket: {str(e)}")
+                raise
             
             self.status.state = BotState.STOPPED
             log_info("✅ Tous les composants initialisés avec succès")
@@ -188,22 +208,34 @@ class TradingBot:
             return True
             
         except Exception as e:
-            log_error(f"Erreur lors de l'initialisation: {str(e)}")
+            tb = traceback.format_exc()
+            log_error(f"Erreur lors de l'initialisation: {str(e)}\nTraceback:\n{tb}")
             self.status.state = BotState.ERROR
             self.status.errors.append(str(e))
             return False
     
     async def _setup_websocket_subscriptions(self, symbols: List[str]):
         """Configure les abonnements WebSocket"""
-        for symbol in symbols:
-            # S'abonner aux données nécessaires
-            self.websocket_feed.subscribe(
-                symbol=symbol,
-                data_types=[DataType.TICKER, DataType.TRADES, DataType.ORDERBOOK],
-                callback=self._handle_market_update
-            )
+        log_info(f"Configuration des abonnements WebSocket pour {len(symbols)} paires")
         
-        log_info(f"Abonné aux flux WebSocket pour {len(symbols)} paires")
+        if not self.websocket_feed:
+            raise Exception("WebSocket feed non initialisé")
+            
+        for symbol in symbols:
+            try:
+                log_info(f"Abonnement à {symbol}")
+                # S'abonner aux données nécessaires
+                self.websocket_feed.subscribe(
+                    symbol=symbol,
+                    data_types=[DataType.TICKER, DataType.TRADES, DataType.ORDERBOOK],
+                    callback=self._handle_market_update
+                )
+                log_info(f"✅ Abonnement réussi pour {symbol}")
+            except Exception as e:
+                log_error(f"Erreur lors de l'abonnement à {symbol}: {str(e)}")
+                raise
+        
+        log_info(f"✅ Abonné aux flux WebSocket pour {len(symbols)} paires")
     
     async def _handle_market_update(self, update: MarketUpdate):
         """
@@ -242,11 +274,24 @@ class TradingBot:
         self.status.state = BotState.RUNNING
         self.status.start_time = datetime.now()
         
-        # Créer la tâche principale
-        self._main_task = asyncio.create_task(self._main_loop())
-        
-        # Attendre l'arrêt
-        await self._shutdown_event.wait()
+        try:
+            # Créer la tâche principale
+            self._main_task = asyncio.create_task(self._main_loop())
+            log_info("Tâche principale créée")
+            
+            # Attendre que la tâche principale soit terminée
+            await self._main_task
+            
+        except asyncio.CancelledError:
+            log_info("Bot arrêté par l'utilisateur")
+            self.status.state = BotState.STOPPED
+        except Exception as e:
+            log_error(f"Erreur critique dans le bot: {str(e)}")
+            self.status.state = BotState.ERROR
+            self.status.errors.append(str(e))
+        finally:
+            # Nettoyer les ressources
+            await self.shutdown()
     
     async def _main_loop(self):
         """Boucle principale du bot"""
@@ -261,19 +306,52 @@ class TradingBot:
             self._create_monitored_task(self._health_check_loop(), "Health Check")
         ]
         
+        log_info(f"✅ {len(tasks)} tâches principales créées")
+        
         try:
-            # Attendre que toutes les tâches se terminent
-            await asyncio.gather(*tasks)
+            # Boucle principale
+            while not self._shutdown_event.is_set():
+                # Vérifier l'état des tâches
+                for i, task in enumerate(tasks):
+                    if task.done():
+                        if task.exception():
+                            log_error(f"Tâche {i} terminée avec erreur: {task.exception()}")
+                            # Recréer la tâche
+                            if i == 0:
+                                tasks[i] = self._create_monitored_task(self._market_scanner_task(), "Scanner")
+                            elif i == 1:
+                                tasks[i] = self._create_monitored_task(self._strategy_loop(), "Strategy")
+                            elif i == 2:
+                                tasks[i] = self._create_monitored_task(self._risk_monitor_loop(), "Risk Monitor")
+                            elif i == 3:
+                                tasks[i] = self._create_monitored_task(self._performance_tracker_loop(), "Performance")
+                            elif i == 4:
+                                tasks[i] = self._create_monitored_task(self._health_check_loop(), "Health Check")
+                
+                # Attendre un court instant
+                await asyncio.sleep(1)
+                
+        except asyncio.CancelledError:
+            log_info("Boucle principale annulée")
+            raise
         except Exception as e:
-            log_error(f"Erreur dans la boucle principale: {str(e)}")
+            log_error(f"Erreur critique dans la boucle principale: {str(e)}")
             self.status.state = BotState.ERROR
+            raise
         finally:
             log_info("Boucle principale terminée")
+            # Annuler toutes les tâches
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # Attendre que toutes les tâches soient annulées
+            await asyncio.gather(*tasks, return_exceptions=True)
     
     def _create_monitored_task(self, coro, name: str) -> asyncio.Task:
         """Crée une tâche surveillée"""
         async def monitored():
             try:
+                log_info(f"Tâche {name} démarrée")
                 await coro
             except asyncio.CancelledError:
                 log_info(f"Tâche {name} annulée")
@@ -281,8 +359,10 @@ class TradingBot:
             except Exception as e:
                 log_error(f"Erreur dans tâche {name}: {str(e)}")
                 self.status.errors.append(f"{name}: {str(e)}")
+                # Ne pas relancer l'exception pour éviter l'arrêt de la boucle principale
+                return
         
-        task = asyncio.create_task(monitored())
+        task = asyncio.create_task(monitored(), name=name)
         self._tasks.add(task)
         task.add_done_callback(lambda t: self._tasks.discard(t))
         return task
@@ -310,27 +390,52 @@ class TradingBot:
         """Boucle d'exécution des stratégies"""
         interval = self.config.get('strategy_interval', 60)  # 1 minute par défaut
         
-        while self.status.state == BotState.RUNNING:
+        while self.status.state == BotState.RUNNING and not self._shutdown_event.is_set():
             try:
+                log_debug("Exécution de la boucle de stratégie...")
+                
+                # Vérifier que tous les composants sont prêts
+                if not all([self.pair_manager, self.market_data, self.websocket_feed]):
+                    log_warning("Composants non initialisés, attente...")
+                    await asyncio.sleep(5)
+                    continue
+                
                 # Mettre à jour les données
-                await self.pair_manager.update_market_data()
+                try:
+                    await self.pair_manager.update_market_data()
+                    log_debug("Données de marché mises à jour")
+                except Exception as e:
+                    log_error(f"Erreur mise à jour données: {str(e)}")
+                    await asyncio.sleep(10)
+                    continue
                 
                 # Vérifier les signaux
-                signals = await self.pair_manager.check_signals()
-                
-                if signals:
-                    log_info(f"📊 {len(signals)} signaux détectés")
-                    
-                    # Exécuter les signaux
-                    await self.pair_manager.execute_signals(signals)
+                try:
+                    signals = await self.pair_manager.check_signals()
+                    if signals:
+                        log_info(f"📊 {len(signals)} signaux détectés")
+                        # Exécuter les signaux
+                        await self.pair_manager.execute_signals(signals)
+                except Exception as e:
+                    log_error(f"Erreur vérification signaux: {str(e)}")
+                    await asyncio.sleep(10)
+                    continue
                 
                 # Mettre à jour les métriques
                 self.status.open_positions = len(self.pair_manager.positions)
                 self.status.last_update = datetime.now()
                 
+                # Sauvegarder l'état
+                if self.config.get('save_state', True):
+                    await self._save_state()
+                    log_debug("État du bot sauvegardé")
+                
                 # Attendre avant la prochaine itération
                 await asyncio.sleep(interval)
                 
+            except asyncio.CancelledError:
+                log_info("Boucle de stratégie annulée")
+                raise
             except Exception as e:
                 log_error(f"Erreur dans strategy loop: {str(e)}")
                 await asyncio.sleep(10)
@@ -532,28 +637,37 @@ class TradingBot:
     
     async def shutdown(self):
         """Arrête proprement le bot"""
-        try:
-            log_info("🛑 Arrêt du bot en cours...")
-            self.status.state = BotState.STOPPING
-            
-            # Sauvegarder l'état final
-            await self._save_state()
-            
-            # Fermer les connexions
-            if self.websocket_feed:
-                await self.websocket_feed.disconnect()
-            
-            if self.exchange:
-                await self.exchange.close()
-            
-            self.status.state = BotState.STOPPED
-            log_info("✅ Bot arrêté proprement")
-            
-        except Exception as e:
-            log_error(f"Erreur lors de l'arrêt: {str(e)}")
-            self.status.state = BotState.ERROR
-        finally:
-            self._shutdown_event.set()
+        log_info("Arrêt du bot en cours...")
+        
+        # Marquer l'arrêt
+        self._shutdown_event.set()
+        
+        # Annuler la tâche principale
+        if self._main_task and not self._main_task.done():
+            self._main_task.cancel()
+            try:
+                await self._main_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Annuler toutes les autres tâches
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Attendre que toutes les tâches soient terminées
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        
+        # Fermer les connexions
+        if self.websocket_feed:
+            await self.websocket_feed.disconnect()
+        
+        if self.exchange:
+            await self.exchange.close()
+        
+        self.status.state = BotState.STOPPED
+        log_info("Bot arrêté avec succès")
     
     def get_status(self) -> Dict:
         """Retourne l'état actuel du bot"""
@@ -590,3 +704,8 @@ class TradingBot:
                 'strategy': self.config['strategy']['name']
             }
         }
+
+    def stop(self):
+        """Arrête proprement le bot (placeholder)"""
+        from src.core.logger import log_info
+        log_info("Arrêt du TradingBot (méthode stop)")

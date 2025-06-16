@@ -14,6 +14,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 import secrets
+from fastapi import WebSocketDisconnect, ConnectionClosed
 
 from ..core.logger import log_info, log_error
 
@@ -172,29 +173,46 @@ class Dashboard:
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             """WebSocket pour les mises à jour temps réel"""
-            await websocket.accept()
-            self.websocket_clients.append(websocket)
-            
             try:
-                # Envoyer le status initial
-                if self.bot:
-                    await websocket.send_json({
-                        'type': 'status',
-                        'data': self.bot.get_status()
-                    })
+                await websocket.accept()
+                self.websocket_clients.append(websocket)
+                log_info(f"Nouvelle connexion WebSocket établie. Total clients: {len(self.websocket_clients)}")
                 
-                # Garder la connexion ouverte
-                while True:
-                    # Attendre des messages du client (ping/pong)
-                    data = await websocket.receive_text()
+                try:
+                    # Envoyer le status initial
+                    if self.bot:
+                        await websocket.send_json({
+                            'type': 'status',
+                            'data': self.bot.get_status()
+                        })
                     
-                    if data == "ping":
-                        await websocket.send_text("pong")
-                    
+                    # Garder la connexion ouverte
+                    while True:
+                        try:
+                            # Attendre des messages du client (ping/pong)
+                            data = await websocket.receive_text()
+                            
+                            if data == "ping":
+                                await websocket.send_text("pong")
+                                
+                        except Exception as e:
+                            if isinstance(e, (WebSocketDisconnect, ConnectionClosed)):
+                                log_info("Client WebSocket déconnecté")
+                                break
+                            else:
+                                log_error(f"Erreur WebSocket: {str(e)}")
+                                break
+                        
+                except Exception as e:
+                    log_error(f"Erreur dans la boucle WebSocket: {str(e)}")
+                
             except Exception as e:
-                log_error(f"Erreur WebSocket: {e}")
+                log_error(f"Erreur lors de l'acceptation WebSocket: {str(e)}")
+            
             finally:
-                self.websocket_clients.remove(websocket)
+                if websocket in self.websocket_clients:
+                    self.websocket_clients.remove(websocket)
+                    log_info(f"Client WebSocket retiré. Total clients: {len(self.websocket_clients)}")
         
         @self.app.post("/api/control/pause")
         async def pause_trading(username: str = Depends(verify_credentials)):
@@ -219,6 +237,9 @@ class Dashboard:
     
     async def broadcast_update(self, update_type: str, data: Dict):
         """Diffuse une mise à jour à tous les clients WebSocket"""
+        if not self.websocket_clients:
+            return
+            
         message = {
             'type': update_type,
             'timestamp': datetime.now().isoformat(),
@@ -230,12 +251,18 @@ class Dashboard:
         for websocket in self.websocket_clients:
             try:
                 await websocket.send_json(message)
-            except:
+            except Exception as e:
+                if isinstance(e, (WebSocketDisconnect, ConnectionClosed)):
+                    log_info("Client WebSocket déconnecté lors du broadcast")
+                else:
+                    log_error(f"Erreur lors du broadcast: {str(e)}")
                 disconnected.append(websocket)
         
         # Nettoyer les connexions fermées
         for ws in disconnected:
-            self.websocket_clients.remove(ws)
+            if ws in self.websocket_clients:
+                self.websocket_clients.remove(ws)
+                log_info(f"Client WebSocket retiré après erreur. Total clients: {len(self.websocket_clients)}")
     
     def _get_dashboard_html(self) -> str:
         """Retourne le HTML de la page principale"""
@@ -264,6 +291,7 @@ class Dashboard:
         <header class="mb-8">
             <h1 class="text-3xl font-bold text-gray-800">🤖 Crypto Trading Bot Dashboard</h1>
             <div id="status" class="mt-2 text-lg"></div>
+            <div id="connection-status" class="mt-2 text-sm text-gray-600"></div>
         </header>
         
         <!-- Métriques principales -->
@@ -317,8 +345,51 @@ class Dashboard:
     
     <script>
         // Configuration WebSocket
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        const reconnectDelay = 5000; // 5 secondes
+        
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connecté');
+                document.getElementById('connection-status').textContent = 'Connecté';
+                document.getElementById('connection-status').className = 'mt-2 text-sm text-green-600';
+                reconnectAttempts = 0;
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket déconnecté');
+                document.getElementById('connection-status').textContent = 'Déconnecté - Tentative de reconnexion...';
+                document.getElementById('connection-status').className = 'mt-2 text-sm text-red-600';
+                
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, reconnectDelay);
+                } else {
+                    document.getElementById('connection-status').textContent = 'Déconnecté - Veuillez rafraîchir la page';
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('Erreur WebSocket:', error);
+                document.getElementById('connection-status').textContent = 'Erreur de connexion';
+                document.getElementById('connection-status').className = 'mt-2 text-sm text-red-600';
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'status') {
+                    updateStatus(message.data);
+                } else if (message.type === 'trade') {
+                    updateDashboard();
+                }
+            };
+        }
         
         // Chart.js pour la courbe d'équité
         const ctx = document.getElementById('equityChart').getContext('2d');
@@ -350,26 +421,40 @@ class Dashboard:
             try {
                 // Status
                 const statusResp = await fetch('/api/status');
+                if (!statusResp.ok) {
+                    throw new Error(`Erreur HTTP: ${statusResp.status}`);
+                }
                 const status = await statusResp.json();
                 updateStatus(status);
                 
                 // Performance
                 const perfResp = await fetch('/api/performance');
+                if (!perfResp.ok) {
+                    throw new Error(`Erreur HTTP: ${perfResp.status}`);
+                }
                 const performance = await perfResp.json();
                 updatePerformance(performance);
                 
                 // Positions
                 const posResp = await fetch('/api/positions');
+                if (!posResp.ok) {
+                    throw new Error(`Erreur HTTP: ${posResp.status}`);
+                }
                 const positions = await posResp.json();
                 updatePositions(positions);
                 
                 // Trades
                 const tradesResp = await fetch('/api/trades');
+                if (!tradesResp.ok) {
+                    throw new Error(`Erreur HTTP: ${tradesResp.status}`);
+                }
                 const trades = await tradesResp.json();
                 updateTrades(trades);
                 
             } catch (error) {
                 console.error('Erreur mise à jour:', error);
+                document.getElementById('connection-status').textContent = `Erreur: ${error.message}`;
+                document.getElementById('connection-status').className = 'mt-2 text-sm text-red-600';
             }
         }
         
@@ -498,42 +583,37 @@ class Dashboard:
             container.innerHTML = html;
         }
         
-        // WebSocket handlers
-        ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            
-            if (message.type === 'status') {
-                updateStatus(message.data);
-            } else if (message.type === 'trade') {
-                // Rafraîchir les données
-                updateDashboard();
-            }
-        };
-        
-        ws.onerror = (error) => {
-            console.error('Erreur WebSocket:', error);
-        };
-        
         // Contrôles
         document.getElementById('pause-btn').addEventListener('click', async () => {
-            await fetch('/api/control/pause', { method: 'POST' });
-            document.getElementById('pause-btn').classList.add('hidden');
-            document.getElementById('resume-btn').classList.remove('hidden');
+            try {
+                const response = await fetch('/api/control/pause', { method: 'POST' });
+                if (!response.ok) throw new Error(`Erreur HTTP: ${response.status}`);
+                document.getElementById('pause-btn').classList.add('hidden');
+                document.getElementById('resume-btn').classList.remove('hidden');
+            } catch (error) {
+                console.error('Erreur pause:', error);
+            }
         });
         
         document.getElementById('resume-btn').addEventListener('click', async () => {
-            await fetch('/api/control/resume', { method: 'POST' });
-            document.getElementById('resume-btn').classList.add('hidden');
-            document.getElementById('pause-btn').classList.remove('hidden');
+            try {
+                const response = await fetch('/api/control/resume', { method: 'POST' });
+                if (!response.ok) throw new Error(`Erreur HTTP: ${response.status}`);
+                document.getElementById('resume-btn').classList.add('hidden');
+                document.getElementById('pause-btn').classList.remove('hidden');
+            } catch (error) {
+                console.error('Erreur resume:', error);
+            }
         });
         
-        // Mise à jour initiale et périodique
+        // Initialisation
+        connectWebSocket();
         updateDashboard();
         setInterval(updateDashboard, 5000);  // Toutes les 5 secondes
         
         // Ping WebSocket pour maintenir la connexion
         setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send('ping');
             }
         }, 30000);  // Toutes les 30 secondes
@@ -557,5 +637,8 @@ class Dashboard:
                 await asyncio.sleep(5)  # Mise à jour toutes les 5 secondes
                 
             except Exception as e:
-                log_error(f"Erreur dans update loop: {e}")
+                log_error(f"Erreur dans update loop: {str(e)}")
                 await asyncio.sleep(10)
+
+dashboard_instance = Dashboard()
+app = dashboard_instance.app

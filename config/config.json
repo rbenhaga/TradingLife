@@ -2,6 +2,7 @@
   "exchange": {
     "name": "binance",
     "testnet": true,
+    "skip_connection": true,
     "api_key": "",
     "api_secret": ""
   },
@@ -41,6 +42,23 @@
   "market_data": {
     "cache_size": 500,
     "update_interval": 60
+  },
+  "websocket": {
+    "max_reconnect_attempts": 5,
+    "heartbeat_interval": 30,
+    "heartbeat_timeout": 60,
+    "receive_timeout": 60,
+    "ping_interval": 30,
+    "ping_timeout": 20,
+    "close_timeout": 20,
+    "max_message_size": 1048576,
+    "max_queue_size": 1024,
+    "compression": false,
+    "subscription_delay": 1.0,
+    "max_subscriptions_per_second": 5,
+    "batch_subscriptions": true,
+    "batch_size": 5,
+    "batch_delay": 2.0
   },
   "scanner_interval": 300,
   "strategy_interval": 60,
