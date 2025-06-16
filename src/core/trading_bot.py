@@ -15,15 +15,19 @@ from enum import Enum
 import os
 import traceback
 
-from .logger import log_info, log_error, log_debug, log_warning, log_trade
-from .multi_pair_manager import MultiPairManager
-from .watchlist_scanner import WatchlistScanner
-from .weighted_score_engine import WeightedScoreEngine
-from .risk_manager import RiskManager
-from .market_data import MarketData
-from .websocket_market_feed import WebSocketMarketFeed, DataType, MarketUpdate
+# Ajouter le répertoire racine au PYTHONPATH
+root_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(root_dir))
+
+from src.core.logger import log_info, log_error, log_debug, log_warning, log_trade
+from src.core.multi_pair_manager import MultiPairManager
+from src.core.watchlist_scanner import WatchlistScanner
+from src.core.weighted_score_engine import WeightedScoreEngine
+from src.core.risk_manager import RiskManager
+from src.core.market_data import MarketData
+from src.core.websocket_market_feed import WebSocketMarketFeed, DataType, MarketUpdate
+from src.exchanges.binance import BinanceConnector
 from ..strategies.strategy import MultiSignalStrategy
-from ..exchanges.exchange_connector import ExchangeConnector
 from config.settings import load_config, validate_config
 
 
@@ -74,7 +78,7 @@ class TradingBot:
         )
         
         # Composants principaux
-        self.exchange: Optional[ExchangeConnector] = None
+        self.exchange: Optional[BinanceConnector] = None
         self.websocket_feed: Optional[WebSocketMarketFeed] = None
         self.watchlist_scanner: Optional[WatchlistScanner] = None
         self.risk_manager: Optional[RiskManager] = None
@@ -133,7 +137,7 @@ class TradingBot:
             log_info("Initialisation des composants...")
             
             # 1. Exchange connector
-            self.exchange = ExchangeConnector(
+            self.exchange = BinanceConnector(
                 exchange_name=self.config['exchange']['name'],
                 testnet=self.config['exchange']['testnet'],
                 skip_connection=self.config['exchange'].get('skip_connection', False)

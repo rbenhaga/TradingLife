@@ -3,12 +3,19 @@ Module de scan de watchlist pour le bot de trading
 """
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import logging
 
-from ..exchanges.exchange_connector import ExchangeConnector
-from .logger import log_info, log_error, log_debug
+# Ajouter le répertoire racine au PYTHONPATH
+root_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(root_dir))
+
+from src.exchanges.exchange_connector import ExchangeConnector
+from src.core.logger import log_info, log_error, log_debug
+from src.core.market_data import MarketData
 
 logger = logging.getLogger(__name__)
 
@@ -113,3 +120,37 @@ class WatchlistScanner:
         except Exception as e:
             log_error(f"Erreur lors de la vérification de la paire {symbol}: {str(e)}")
             return False
+
+# Ajouter dans watchlist_scanner.py
+async def calculate_volatility_metrics(self, symbol: str) -> Dict:
+    """Calcule les métriques de volatilité avancées"""
+    try:
+        # Récupérer les données 15m
+        ohlcv = await self.exchange.get_ohlcv(symbol, '15m', limit=100)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # ATR pour la volatilité
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift())
+        low_close = abs(df['low'] - df['close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        atr = true_range.rolling(14).mean().iloc[-1]
+        atr_pct = (atr / df['close'].iloc[-1]) * 100
+        
+        # Volume profile
+        volume_ma = df['volume'].rolling(20).mean()
+        volume_spike = df['volume'].iloc[-1] / volume_ma.iloc[-1]
+        
+        # Momentum
+        momentum = (df['close'].iloc[-1] / df['close'].iloc[-20] - 1) * 100
+        
+        return {
+            'atr_pct': atr_pct,
+            'volume_spike': volume_spike,
+            'momentum_20': momentum,
+            'volatility_score': atr_pct * volume_spike  # Score composite
+        }
+    except Exception as e:
+        log_error(f"Erreur calcul volatilité {symbol}: {e}")
+        return {}

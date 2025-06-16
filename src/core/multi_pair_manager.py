@@ -4,12 +4,19 @@ Coordonne les stratégies sur plusieurs paires simultanément
 """
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 from collections import defaultdict
 
-from .logger import log_info, log_debug, log_warning, log_trade
-from .watchlist_scanner import WatchlistScanner
+# Ajouter le répertoire racine au PYTHONPATH
+root_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(root_dir))
+
+from src.core.watchlist_scanner import WatchlistScanner
+from src.core.market_data import MarketData
+from src.core.logger import log_info, log_debug, log_warning, log_trade, log_error
 from .weighted_score_engine import WeightedScoreEngine
 from .risk_manager import RiskManager
 from ..strategies.strategy import MultiSignalStrategy
