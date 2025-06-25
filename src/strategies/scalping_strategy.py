@@ -48,7 +48,7 @@ class ScalpingStrategy:
     Combine plusieurs techniques pour identifier des opportunités court terme
     """
     
-    def __init__(self, symbol: str, config: Dict = None):
+    def __init__(self, symbol: str, config: Optional[Dict] = None):
         self.symbol = symbol
         self.config = config or self._default_config()
         
@@ -359,7 +359,7 @@ class ScalpingStrategy:
             signals.append(micro_signal)
         
         # 2. Momentum
-        momentum_signal = self._analyze_momentum(None)  # TODO: passer le buffer
+        momentum_signal = self._analyze_momentum(self.fast_market_buffer)
         if momentum_signal:
             signals.append(momentum_signal)
         

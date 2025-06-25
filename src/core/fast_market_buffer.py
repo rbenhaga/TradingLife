@@ -300,7 +300,7 @@ class FastMarketBuffer:
         spread_vol, avg_spread, vol_pressure = self._detect_microstructure_fast(
             self.bids[symbol_id], self.asks[symbol_id],
             self.volumes[symbol_id], self.timestamps[symbol_id],
-            write_idx, count, min(100, count)
+            write_idx, int(count), min(100, int(count))
         )
         
         return {

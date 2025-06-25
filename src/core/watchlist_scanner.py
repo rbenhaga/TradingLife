@@ -121,6 +121,25 @@ class WatchlistScanner:
             log_error(f"Erreur lors de la vérification de la paire {symbol}: {str(e)}")
             return False
 
+    def get_trading_params(self, symbol: str) -> dict:
+        """
+        Retourne les paramètres de trading pour une paire (valeurs par défaut)
+        """
+        return {
+            'timeframe': '15m',
+            'position_size': 0.1,
+            'stop_loss': 0.02,
+            'take_profit': 0.04
+        }
+
+    def get_pair_metrics(self, symbol: str) -> dict:
+        """
+        Retourne des métriques fictives pour une paire (valeurs par défaut)
+        """
+        return {
+            'volatility': 1.0
+        }
+
 # Ajouter dans watchlist_scanner.py
 async def calculate_volatility_metrics(self, symbol: str) -> Dict:
     """Calcule les métriques de volatilité avancées"""

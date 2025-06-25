@@ -6,7 +6,7 @@ Coordonne les stratégies sur plusieurs paires simultanément
 import asyncio
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 from collections import defaultdict
 
@@ -53,7 +53,7 @@ class MultiPairManager:
         self.positions = {}
         
         # Performance par paire
-        self.performance = defaultdict(lambda: {
+        self.performance: defaultdict[str, dict[str, Any]] = defaultdict(lambda: {
             'trades': 0,
             'wins': 0,
             'losses': 0,
@@ -74,7 +74,7 @@ class MultiPairManager:
             await self.watchlist_scanner.update_watchlist()
             
             # Créer les stratégies pour chaque paire
-            for symbol in self.watchlist_scanner.get_watchlist()[:5]:  # Top 5 pour commencer
+            for symbol in (await self.watchlist_scanner.get_watchlist())[:5]:  # Top 5 pour commencer
                 self.strategies[symbol] = MultiSignalStrategy(symbol=symbol)
                 log_info(f"Stratégie créée pour {symbol}")
             
@@ -171,7 +171,7 @@ class MultiPairManager:
         
         # Vérifier le cooldown (pas plus d'un trade par heure sur la même paire)
         perf = self.performance[symbol]
-        if perf['last_trade']:
+        if isinstance(perf['last_trade'], datetime):
             time_since_last = (datetime.now() - perf['last_trade']).total_seconds()
             if time_since_last < 3600:  # 1 heure
                 return False
@@ -249,14 +249,14 @@ class MultiPairManager:
         if self.paper_trading:
             # Mettre à jour les performances
             perf = self.performance[symbol]
-            perf['trades'] += 1
-            perf['pnl'] += pnl
+            perf['trades'] = (perf['trades'] or 0) + 1
+            perf['pnl'] = (perf['pnl'] or 0.0) + pnl
             perf['last_trade'] = datetime.now()
             
             if pnl > 0:
-                perf['wins'] += 1
+                perf['wins'] = (perf['wins'] or 0) + 1
             else:
-                perf['losses'] += 1
+                perf['losses'] = (perf['losses'] or 0) + 1
             
             # Logger le trade
             log_trade(
@@ -326,7 +326,7 @@ class MultiPairManager:
         # Scanner le marché
         await self.watchlist_scanner.update_watchlist()
         
-        new_watchlist = set(self.watchlist_scanner.get_watchlist()[:5])  # Top 5
+        new_watchlist = set((await self.watchlist_scanner.get_watchlist())[:5])  # Top 5
         
         # Paires à ajouter
         to_add = new_watchlist - old_watchlist
