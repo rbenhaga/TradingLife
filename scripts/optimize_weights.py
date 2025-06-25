@@ -39,14 +39,14 @@ def main():
         '--trials', '-t',
         type=int,
         default=100,
-        help='Nombre d'essais (défaut: 100)'
+        help='Nombre d\'essais (défaut: 100)'
     )
     
     parser.add_argument(
         '--days', '-d',
         type=int,
         default=30,
-        help='Nombre de jours d'historique (défaut: 30)'
+        help='Nombre de jours d\'historique (défaut: 30)'
     )
     
     parser.add_argument(

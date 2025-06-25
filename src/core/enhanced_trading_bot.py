@@ -80,6 +80,11 @@ class EnhancedTradingBot(TradingBot):
             if signal.confidence > 0.7:
                 await self._execute_scalping_trade(symbol, signal)
     
+    async def _execute_scalping_trade(self, symbol, signal):
+        """Exécute un trade de scalping (méthode à implémenter selon la logique métier)."""
+        log_info(f"Exécution du trade scalping pour {symbol} avec signal {signal.signal_type.value} (confiance: {signal.confidence})")
+        # TODO: Ajouter la logique d'exécution réelle ici
+    
     async def _enhanced_market_update_handler(self, update):
         """Handler amélioré avec le buffer rapide"""
         # Mise à jour du buffer rapide

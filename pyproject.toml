@@ -1,0 +1,2 @@
+[tool.poetry.dependencies]
+TA-Lib = "^0.6.4"
