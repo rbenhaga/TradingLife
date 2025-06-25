@@ -75,7 +75,7 @@ def log_critical(message: str, **kwargs):
 
 # Fonction pour logger les trades
 def log_trade(action: str, symbol: str, quantity: float, price: float, 
-              side: str, profit: float = None, **kwargs):
+              side: str, profit: float | None = None, **kwargs):
     """
     Log une opération de trading
     

@@ -10,12 +10,12 @@ from numba import jit, njit
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
-import talib
+import pandas_ta as ta
 from collections import deque
 import time
-
 from ..core.fast_market_buffer import MarketSnapshot, FastMarketBuffer
 from ..core.logger import log_info, log_debug
+import pandas as pd
 
 
 class SignalType(Enum):
@@ -67,6 +67,8 @@ class ScalpingStrategy:
         self.volatility_regime = "NORMAL"
         self.liquidity_score = 1.0
         self.momentum_strength = 0.0
+
+        self.fast_market_buffer = FastMarketBuffer()
         
         # Pré-calcul des seuils
         self._precompute_thresholds()
@@ -267,30 +269,21 @@ class ScalpingStrategy:
         
         if len(self.price_buffer) < self.config['bollinger_period']:
             return None
-        
-        prices = np.array(list(self.price_buffer))
-        
-        # Bollinger Bands
-        sma = talib.SMA(prices, timeperiod=self.config['bollinger_period'])
-        std = talib.STDDEV(prices, timeperiod=self.config['bollinger_period'])
-        upper_band = sma + (std * self.config['bollinger_std'])
-        lower_band = sma - (std * self.config['bollinger_std'])
-        
-        current_price = prices[-1]
-        
-        # RSI pour confirmation
-        rsi = talib.RSI(prices, timeperiod=self.config['rsi_period'])[-1]
-        
-        # Prix en dehors des bandes + RSI extrême
-        if current_price < lower_band[-1] and rsi < self.config['rsi_oversold']:
-            # Opportunité d'achat (oversold)
+        df = pd.DataFrame({'close': list(self.price_buffer)})
+        bbands = df.ta.bbands(length=self.config['bollinger_period'], std=self.config['bollinger_std'])
+        df['rsi'] = df.ta.rsi(length=self.config['rsi_period'])
+        if any(col not in bbands or bbands[col].notnull().sum() == 0 for col in [f'BBL_{self.config["bollinger_period"]}_2.0', f'BBU_{self.config["bollinger_period"]}_2.0']):
+            return None
+        lower_band = bbands[f'BBL_{self.config["bollinger_period"]}_2.0'].iloc[-1]
+        upper_band = bbands[f'BBU_{self.config["bollinger_period"]}_2.0'].iloc[-1]
+        current_price = df['close'].iloc[-1]
+        rsi = df['rsi'].iloc[-1] if 'rsi' in df and df['rsi'].notnull().sum() > 0 else 0
+        if current_price < lower_band and rsi < self.config['rsi_oversold']:
             confidence = (self.config['rsi_oversold'] - rsi) / self.config['rsi_oversold']
-            confidence *= (lower_band[-1] - current_price) / lower_band[-1]
-            
+            confidence *= (lower_band - current_price) / lower_band
             entry = current_price * 1.0002
-            target = sma[-1]  # Retour à la moyenne
-            stop = current_price * 0.995  # Stop large
-            
+            target = (upper_band + lower_band) / 2  # moyenne
+            stop = current_price * 0.995
             return ScalpingSignal(
                 signal_type=SignalType.MEAN_REVERSION,
                 direction="BUY",
@@ -299,22 +292,15 @@ class ScalpingStrategy:
                 target_price=target,
                 stop_price=stop,
                 size_multiplier=1.2,
-                ttl_ms=5000,  # 5 secondes
-                metadata={
-                    'rsi': rsi,
-                    'bollinger_position': 'below_lower'
-                }
+                ttl_ms=5000,
+                metadata={'rsi': rsi, 'bollinger_position': 'below_lower'}
             )
-        
-        elif current_price > upper_band[-1] and rsi > self.config['rsi_overbought']:
-            # Opportunité de vente (overbought)
+        elif current_price > upper_band and rsi > self.config['rsi_overbought']:
             confidence = (rsi - self.config['rsi_overbought']) / (100 - self.config['rsi_overbought'])
-            confidence *= (current_price - upper_band[-1]) / upper_band[-1]
-            
+            confidence *= (current_price - upper_band) / upper_band
             entry = current_price * 0.9998
-            target = sma[-1]
+            target = (upper_band + lower_band) / 2
             stop = current_price * 1.005
-            
             return ScalpingSignal(
                 signal_type=SignalType.MEAN_REVERSION,
                 direction="SELL",
@@ -324,12 +310,8 @@ class ScalpingStrategy:
                 stop_price=stop,
                 size_multiplier=1.2,
                 ttl_ms=5000,
-                metadata={
-                    'rsi': rsi,
-                    'bollinger_position': 'above_upper'
-                }
+                metadata={'rsi': rsi, 'bollinger_position': 'above_upper'}
             )
-        
         return None
     
     def generate_signal(self, snapshot: MarketSnapshot, stats: Dict,

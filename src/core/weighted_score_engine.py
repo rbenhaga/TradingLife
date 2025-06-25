@@ -51,7 +51,7 @@ class WeightedScoreEngine:
     Moteur de calcul de score pondéré pour combiner plusieurs indicateurs
     """
     
-    def __init__(self, weights: Dict[str, float] = None):
+    def __init__(self, weights: Optional[Dict[str, float]] = None):
         """
         Initialise le moteur de score
         

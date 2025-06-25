@@ -1,19 +1,20 @@
 # src/core/adaptive_backtester.py
 """
 Backtester adaptatif avec optimisation automatique des paramètres
-Utilise Optuna + Ray pour parallélisation
+Utilise Optuna + Multiprocessing pour parallélisation
 """
 
 import optuna
 from optuna.samplers import TPESampler
-import ray
-from typing import Dict, List, Any, Tuple
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import asyncio
 import json
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as mp
+from typing import Dict, List, Tuple
 
 from .backtester import Backtester, BacktestResult
 from ..strategies.ai_enhanced_strategy import AIEnhancedStrategy
@@ -30,10 +31,6 @@ class AdaptiveBacktester:
         self.initial_capital = initial_capital
         self.optimization_history = []
         self.best_params_by_regime = {}
-        
-        # Initialiser Ray si pas déjà fait
-        if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
     
     def optimize_strategy(self, symbol: str, data: pd.DataFrame, 
                          n_trials: int = 100) -> Dict:
@@ -122,7 +119,6 @@ class AdaptiveBacktester:
             'study': study
         }
     
-    @ray.remote
     def _backtest_regime(self, symbol: str, regime_data: pd.DataFrame, 
                         params: Dict) -> BacktestResult:
         """Backtest sur un régime spécifique (pour parallélisation)"""

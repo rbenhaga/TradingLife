@@ -9,6 +9,7 @@ import asyncio
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
 import time
+import inspect
 
 from ..core.logger import log_info, log_error, log_debug, log_warning
 
@@ -119,7 +120,8 @@ class ExchangeConnector:
                 'ask': 50001.0,
                 'volume': 1000.0
             }
-        return await self._api_call('fetch_ticker', symbol)
+        result = await self._api_call('fetch_ticker', symbol)
+        return result if isinstance(result, dict) else None
     
     async def get_ohlcv(self, symbol: str, timeframe: str = '15m', 
                        limit: int = 100) -> Optional[List]:
@@ -149,7 +151,8 @@ class ExchangeConnector:
                     1000.0  # Volume
                 ])
             return data
-        return await self._api_call('fetch_ohlcv', symbol, timeframe, limit=limit)
+        result = await self._api_call('fetch_ohlcv', symbol, timeframe, limit=limit)
+        return result if isinstance(result, list) else None
     
     async def get_orderbook(self, symbol: str, limit: int = 20) -> Optional[Dict]:
         """
@@ -167,7 +170,8 @@ class ExchangeConnector:
                 'bids': [[50000.0 - i, 1.0] for i in range(limit)],
                 'asks': [[50000.0 + i, 1.0] for i in range(limit)]
             }
-        return await self._api_call('fetch_order_book', symbol, limit)
+        result = await self._api_call('fetch_order_book', symbol, limit)
+        return result if isinstance(result, dict) else None
     
     async def get_balance(self) -> Optional[Dict]:
         """
@@ -181,7 +185,8 @@ class ExchangeConnector:
                 'USDT': {'free': 10000.0, 'used': 0.0, 'total': 10000.0},
                 'BTC': {'free': 1.0, 'used': 0.0, 'total': 1.0}
             }
-        return await self._api_call('fetch_balance')
+        result = await self._api_call('fetch_balance')
+        return result if isinstance(result, dict) else None
     
     async def create_order(self, symbol: str, order_type: str, side: str, 
                           amount: float, price: Optional[float] = None,
@@ -219,8 +224,7 @@ class ExchangeConnector:
                 f"{price if price else 'market'} | ID: {order['id']}"
             )
             return order
-            
-        order = await self._api_call(
+        result = await self._api_call(
             'create_order',
             symbol=symbol,
             type=order_type,
@@ -229,14 +233,13 @@ class ExchangeConnector:
             price=price,
             params=params or {}
         )
-        
-        if order:
+        if result and isinstance(result, dict):
             log_info(
                 f"📝 Ordre créé: {symbol} {side} {amount} @ "
-                f"{price if price else 'market'} | ID: {order.get('id')}"
+                f"{price if price else 'market'} | ID: {result.get('id')}"
             )
-        
-        return order
+            return result
+        return None
     
     async def cancel_order(self, order_id: str, symbol: str) -> bool:
         """
@@ -273,7 +276,8 @@ class ExchangeConnector:
         """
         if self.skip_connection:
             return []
-        return await self._api_call('fetch_open_orders', symbol)
+        result = await self._api_call('fetch_open_orders', symbol)
+        return result if isinstance(result, list) else []
     
     async def get_trades(self, symbol: str, limit: int = 50) -> List[Dict]:
         """
@@ -288,7 +292,8 @@ class ExchangeConnector:
         """
         if self.skip_connection:
             return []
-        return await self._api_call('fetch_trades', symbol, limit=limit)
+        result = await self._api_call('fetch_trades', symbol, limit=limit)
+        return result if isinstance(result, list) else []
     
     async def _api_call(self, method: str, *args, **kwargs):
         """
@@ -317,13 +322,22 @@ class ExchangeConnector:
                 await asyncio.sleep(0.05)
             
             # Appel API
-            method = getattr(self.exchange, method)
-            result = await method(*args, **kwargs)
+            api_method = getattr(self.exchange, method, None)
+            if not callable(api_method):
+                log_error(f"Méthode {method} non trouvée sur l'exchange")
+                return None
+            
+            if inspect.iscoroutinefunction(api_method):
+                result = await api_method(*args, **kwargs)
+            else:
+                result = api_method(*args, **kwargs)
             
             # Mise à jour des métriques
             self.api_calls += 1
             self.last_call_time = time.time()
             
+            # Cast explicite selon le contexte d'appel
+            # (On laisse le typage dynamique ici, mais chaque méthode appelante doit vérifier le type)
             return result
             
         except ccxt.NetworkError as e:
@@ -413,6 +427,10 @@ class ExchangeConnector:
                         'priceChangePercent': 1.8
                     }
                 }
+            
+            if not self.exchange:
+                log_error("Exchange non initialisé")
+                return {}
             
             # Récupérer les tickers de l'exchange
             tickers = await self.exchange.fetch_tickers()

@@ -8,7 +8,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from ..core.logger import log_info, log_debug, log_warning, log_error
-from ..core.weighted_score_engine import WeightedScoreEngine
+from ..core.weighted_score_engine import WeightedScoreEngine, TradingScore
 
 class Strategy(ABC):
     """Classe de base améliorée pour les stratégies de trading"""
@@ -185,7 +185,7 @@ class MultiSignalStrategy(Strategy):
     """Stratégie multi-signaux améliorée"""
     
     def __init__(self, symbol: str, timeframe: str = '15m',
-                 score_weights: Dict[str, float] = None):
+                 score_weights: Optional[Dict[str, float]] = None):
         """
         Initialise la stratégie multi-signal
         
@@ -197,7 +197,7 @@ class MultiSignalStrategy(Strategy):
         super().__init__(symbol, timeframe)
         
         # Import du score engine
-        self.score_engine = WeightedScoreEngine(score_weights)
+        self.score_engine = WeightedScoreEngine(score_weights or {})
         
         # Paramètres de la stratégie
         self.entry_threshold = 0.5  # Score minimum pour entrer
@@ -225,9 +225,9 @@ class MultiSignalStrategy(Strategy):
         # Analyser avec le score engine
         signals = self.score_engine.analyze_indicators(df)
         score_result = self.score_engine.calculate_score(signals)
-        
-        score = score_result['score']
-        confidence = score_result['confidence']
+        score = score_result.total_score
+        confidence = score_result.confidence
+        details = score_result.metadata
         
         # Signal d'achat fort
         if score > self.entry_threshold and confidence > 0.6:
@@ -241,7 +241,7 @@ class MultiSignalStrategy(Strategy):
                 'stop_loss': current_price * (1 - self.stop_loss_pct),
                 'take_profit': current_price * (1 + self.take_profit_pct),
                 'score': score,
-                'details': score_result['details']
+                'details': details
             }
         
         # Signal de vente fort (short)
@@ -256,7 +256,7 @@ class MultiSignalStrategy(Strategy):
                 'stop_loss': current_price * (1 + self.stop_loss_pct),
                 'take_profit': current_price * (1 - self.take_profit_pct),
                 'score': score,
-                'details': score_result['details']
+                'details': details
             }
         
         return None
@@ -279,7 +279,7 @@ class MultiSignalStrategy(Strategy):
         signals = self.score_engine.analyze_indicators(df)
         score_result = self.score_engine.calculate_score(signals)
         
-        score = score_result['score']
+        score = score_result.total_score
         current_price = df['close'].iloc[-1]
         
         # Vérifier stop loss et take profit

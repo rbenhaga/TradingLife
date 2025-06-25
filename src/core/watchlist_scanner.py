@@ -2,11 +2,11 @@
 Module de scan de watchlist pour le bot de trading
 """
 
-import asyncio
 import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+import pandas as pd
 import logging
 
 # Ajouter le répertoire racine au PYTHONPATH
@@ -146,7 +146,7 @@ async def calculate_volatility_metrics(self, symbol: str) -> Dict:
     try:
         # Récupérer les données 15m
         ohlcv = await self.exchange.get_ohlcv(symbol, '15m', limit=100)
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df = pd.DataFrame(ohlcv, columns=pd.Index(['timestamp', 'open', 'high', 'low', 'close', 'volume']))
         
         # ATR pour la volatilité
         high_low = df['high'] - df['low']
@@ -154,15 +154,19 @@ async def calculate_volatility_metrics(self, symbol: str) -> Dict:
         low_close = abs(df['low'] - df['close'].shift())
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         true_range = ranges.max(axis=1)
-        atr = true_range.rolling(14).mean().iloc[-1]
-        atr_pct = (atr / df['close'].iloc[-1]) * 100
+        atr_series = true_range.rolling(14).mean()
+        atr = pd.Series(atr_series).iloc[-1]
+        atr_pct = (pd.Series(df['close']).iloc[-1] if not hasattr(df['close'], 'iloc') else df['close'].iloc[-1])
+        atr_pct = (atr / atr_pct) * 100
         
         # Volume profile
         volume_ma = df['volume'].rolling(20).mean()
-        volume_spike = df['volume'].iloc[-1] / volume_ma.iloc[-1]
+        volume_spike = pd.Series(df['volume']).iloc[-1] / pd.Series(volume_ma).iloc[-1]
         
         # Momentum
-        momentum = (df['close'].iloc[-1] / df['close'].iloc[-20] - 1) * 100
+        close_now = pd.Series(df['close']).iloc[-1] if not hasattr(df['close'], 'iloc') else df['close'].iloc[-1]
+        close_20 = pd.Series(df['close']).iloc[-20]
+        momentum = (close_now / close_20 - 1) * 100
         
         return {
             'atr_pct': atr_pct,

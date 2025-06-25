@@ -9,9 +9,12 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import joblib
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier  # Changer pour Classifier
 from sklearn.preprocessing import StandardScaler
-import talib
+import warnings
+
+import pandas_ta as ta
+
 from datetime import datetime, timedelta
 import asyncio
 
@@ -40,7 +43,7 @@ class AIEnhancedStrategy(Strategy):
     - Sentiment de marché via volume/momentum
     """
     
-    def __init__(self, symbol: str, config: Dict = None):
+    def __init__(self, symbol: str, config: Optional[Dict] = None):
         super().__init__(symbol)
         self.config = config or self._default_config()
         
@@ -105,53 +108,83 @@ class AIEnhancedStrategy(Strategy):
         features = []
         
         # Prix et rendements
+        close = pd.Series(df['close']) if not isinstance(df['close'], pd.Series) else df['close']
+        high = pd.Series(df['high']) if not isinstance(df['high'], pd.Series) else df['high']
+        low = pd.Series(df['low']) if not isinstance(df['low'], pd.Series) else df['low']
+        volume = pd.Series(df['volume']) if not isinstance(df['volume'], pd.Series) else df['volume']
+        features = []
+        current_price = close.iloc[-1] if len(close) > 0 else 0
+        features.append(current_price)
         features.extend([
-            df['close'].iloc[-1],
-            df['close'].pct_change().iloc[-1],
-            df['close'].pct_change(5).iloc[-1],
-            df['close'].pct_change(20).iloc[-1],
-            (df['high'].iloc[-1] - df['low'].iloc[-1]) / df['close'].iloc[-1],  # Range %
+            close.pct_change().iloc[-1] if len(close) > 1 else 0,
+            close.pct_change(5).iloc[-1] if len(close) > 5 else 0,
+            close.pct_change(20).iloc[-1] if len(close) > 20 else 0,
+            (high.iloc[-1] - low.iloc[-1]) / close.iloc[-1] if len(high) > 0 and len(low) > 0 and close.iloc[-1] != 0 else 0,
         ])
         
         # Indicateurs techniques classiques
-        # RSI multi-périodes
-        for period in [7, 14, 21]:
-            rsi = talib.RSI(df['close'], timeperiod=period)
-            features.append(rsi.iloc[-1])
+        # RSI
+        df['rsi'] = df.ta.rsi(length=14)
+        features.append(df['rsi'].iloc[-1] if 'rsi' in df and df['rsi'].notnull().sum() > 0 else 0)
         
         # MACD
-        macd, signal, hist = talib.MACD(df['close'])
-        features.extend([macd.iloc[-1], signal.iloc[-1], hist.iloc[-1]])
+        macd = df.ta.macd()
+        for col in ['MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9']:
+            features.append(macd[col].iloc[-1] if col in macd and macd[col] is not None and macd[col].notnull().sum() > 0 else 0)
         
         # Bollinger Bands
-        upper, middle, lower = talib.BBANDS(df['close'])
-        bb_position = (df['close'].iloc[-1] - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])
-        features.append(bb_position)
+        bbands = df.ta.bbands(length=20, std=2)
+        if all(col in bbands and bbands[col] is not None and bbands[col].notnull().sum() > 0 for col in ['BBL_20_2.0', 'BBU_20_2.0']):
+            lower = bbands['BBL_20_2.0'].iloc[-1]
+            upper = bbands['BBU_20_2.0'].iloc[-1]
+            features.append((current_price - lower) / (upper - lower) if (upper - lower) != 0 else 0)
+        else:
+            features.append(0)
         
-        # ADX (force de tendance)
-        adx = talib.ADX(df['high'], df['low'], df['close'])
-        features.append(adx.iloc[-1])
+        # ADX
+        adx = df.ta.adx()
+        features.append(adx['ADX_14'].iloc[-1] if 'ADX_14' in adx and adx['ADX_14'] is not None and adx['ADX_14'].notnull().sum() > 0 else 0)
         
         # Volume analysis
-        volume_sma = df['volume'].rolling(20).mean()
-        volume_ratio = df['volume'].iloc[-1] / volume_sma.iloc[-1]
-        features.append(volume_ratio)
+        if isinstance(volume, np.ndarray):
+            volume = pd.Series(volume)
+        if isinstance(volume, pd.Series) and len(volume) > 0:
+            volume_sma = volume.rolling(20).mean()
+            if isinstance(volume_sma, np.ndarray):
+                volume_sma = pd.Series(volume_sma)
+            volume_ratio = volume.iloc[-1] / volume_sma.iloc[-1] if len(volume) > 0 and len(volume_sma) > 0 and volume_sma.iloc[-1] != 0 else 0
+            features.append(volume_ratio)
+        else:
+            features.append(0)
         
-        # OBV (On Balance Volume)
-        obv = talib.OBV(df['close'], df['volume'])
-        obv_change = (obv.iloc[-1] - obv.iloc[-20]) / obv.iloc[-20] if obv.iloc[-20] != 0 else 0
-        features.append(obv_change)
+        # OBV
+        obv = ta.obv(close, volume)
+        if obv is not None and isinstance(obv, np.ndarray):
+            obv = pd.Series(obv)
+        if isinstance(obv, pd.Series) and obv.notnull().sum() > 0:
+            obv_val = obv.iloc[-1]
+            obv_20 = obv.iloc[-20] if len(obv) > 20 else obv.iloc[0]
+            obv_change = (obv_val - obv_20) / obv_20 if obv_20 != 0 else 0
+            features.append(obv_change)
+        else:
+            features.append(0)
         
         # Microstructure
-        # Spread moyen (si disponible)
         if 'bid' in df.columns and 'ask' in df.columns:
-            spread_pct = ((df['ask'] - df['bid']) / df['close'] * 100).mean()
+            bid = df['bid']
+            ask = df['ask']
+            if bid is not None and isinstance(bid, np.ndarray):
+                bid = pd.Series(bid)
+            if ask is not None and isinstance(ask, np.ndarray):
+                ask = pd.Series(ask)
+            spread_pct = ((ask - bid) / close * 100).mean() if bid is not None and ask is not None and len(ask) > 0 and len(bid) > 0 else 0
             features.append(spread_pct)
         
         # Volatilité (ATR)
-        atr = talib.ATR(df['high'], df['low'], df['close'])
-        atr_pct = (atr.iloc[-1] / df['close'].iloc[-1]) * 100
-        features.append(atr_pct)
+        atr = df.ta.atr()
+        if atr is not None and isinstance(atr, np.ndarray):
+            atr = pd.Series(atr)
+        features.append(atr.iloc[-1] if isinstance(atr, pd.Series) and atr.notnull().sum() > 0 else 0)
         
         # Patterns détectés (simplifié)
         features.extend(self._detect_patterns_features(df))
@@ -159,19 +192,28 @@ class AIEnhancedStrategy(Strategy):
         # Structure du marché
         # Support/Resistance levels
         support, resistance = self._calculate_support_resistance(df)
-        distance_to_support = (df['close'].iloc[-1] - support) / df['close'].iloc[-1]
-        distance_to_resistance = (resistance - df['close'].iloc[-1]) / df['close'].iloc[-1]
+        distance_to_support = (current_price - support) / current_price if current_price != 0 else 0
+        distance_to_resistance = (resistance - current_price) / current_price if current_price != 0 else 0
         features.extend([distance_to_support, distance_to_resistance])
         
         # Momentum
-        roc_5 = talib.ROC(df['close'], timeperiod=5)
-        roc_10 = talib.ROC(df['close'], timeperiod=10)
-        features.extend([roc_5.iloc[-1], roc_10.iloc[-1]])
+        roc_5 = ta.roc(close, length=5)
+        roc_10 = ta.roc(close, length=10)
+        if roc_5 is not None and isinstance(roc_5, np.ndarray):
+            roc_5 = pd.Series(roc_5)
+        if roc_10 is not None and isinstance(roc_10, np.ndarray):
+            roc_10 = pd.Series(roc_10)
+        features.append(roc_5.iloc[-1] if isinstance(roc_5, pd.Series) and roc_5.notnull().sum() > 0 else 0)
+        features.append(roc_10.iloc[-1] if isinstance(roc_10, pd.Series) and roc_10.notnull().sum() > 0 else 0)
         
         # Market regime features
-        sma_20 = df['close'].rolling(20).mean()
-        sma_50 = df['close'].rolling(50).mean()
-        trend_strength = (sma_20.iloc[-1] - sma_50.iloc[-1]) / sma_50.iloc[-1]
+        sma_20 = close.rolling(20).mean()
+        sma_50 = close.rolling(50).mean()
+        if sma_20 is not None and isinstance(sma_20, np.ndarray):
+            sma_20 = pd.Series(sma_20)
+        if sma_50 is not None and isinstance(sma_50, np.ndarray):
+            sma_50 = pd.Series(sma_50)
+        trend_strength = (sma_20.iloc[-1] - sma_50.iloc[-1]) / sma_50.iloc[-1] if isinstance(sma_20, pd.Series) and isinstance(sma_50, pd.Series) and sma_50.iloc[-1] != 0 else 0
         features.append(trend_strength)
         
         return np.array(features)
@@ -220,45 +262,48 @@ class AIEnhancedStrategy(Strategy):
     
     def _identify_market_regime(self, df: pd.DataFrame) -> MarketRegime:
         """Identifie le régime de marché actuel avec ML ou règles"""
-        # ADX pour la force de tendance
-        adx = talib.ADX(df['high'], df['low'], df['close'], timeperiod=14)
-        
-        # Direction de tendance
-        sma_20 = df['close'].rolling(20).mean()
-        sma_50 = df['close'].rolling(50).mean()
-        
-        # Volatilité
-        returns = df['close'].pct_change()
-        volatility = returns.rolling(20).std() * np.sqrt(252)  # Annualisée
-        
-        # Volume trend
-        volume_sma = df['volume'].rolling(20).mean()
+        adx = ta.adx(df['high'], df['low'], df['close'], timeperiod=14)
+        close = pd.Series(df['close']) if not isinstance(df['close'], pd.Series) else df['close']
+        sma_20 = close.rolling(20).mean()
+        sma_50 = close.rolling(50).mean()
+        returns = close.pct_change()
+        volatility = returns.rolling(20).std() * np.sqrt(252)
+        volume = pd.Series(df['volume']) if not isinstance(df['volume'], pd.Series) else df['volume']
+        volume_sma = volume.rolling(20).mean()
         volume_trend = "STABLE"
-        if df['volume'].iloc[-5:].mean() > volume_sma.iloc[-1] * 1.2:
-            volume_trend = "INCREASING"
-        elif df['volume'].iloc[-5:].mean() < volume_sma.iloc[-1] * 0.8:
-            volume_trend = "DECREASING"
-        
-        # Classification du régime
+        if isinstance(volume, np.ndarray):
+            volume = pd.Series(volume)
+        if isinstance(volume_sma, np.ndarray):
+            volume_sma = pd.Series(volume_sma)
+        if len(volume) > 5 and len(volume_sma) > 0 and volume_sma.iloc[-1] != 0:
+            if volume.iloc[-5:].mean() > volume_sma.iloc[-1] * 1.2:
+                volume_trend = "INCREASING"
+            elif volume.iloc[-5:].mean() < volume_sma.iloc[-1] * 0.8:
+                volume_trend = "DECREASING"
         regime_type = "RANGING"
         strength = 0.5
-        
-        if adx.iloc[-1] > 25:  # Tendance forte
-            if sma_20.iloc[-1] > sma_50.iloc[-1]:
+        adx_val = 0
+        if adx is not None and hasattr(adx, 'columns') and 'ADX_14' in adx and adx['ADX_14'] is not None and isinstance(adx['ADX_14'], (pd.Series, np.ndarray)):
+            adx_col = adx['ADX_14']
+            if isinstance(adx_col, np.ndarray):
+                adx_col = pd.Series(adx_col)
+            if adx_col.notnull().sum() > 0:
+                adx_val = adx_col.iloc[-1]
+        if adx_val > 25:
+            if sma_20 is not None and sma_50 is not None and isinstance(sma_20, pd.Series) and isinstance(sma_50, pd.Series) and sma_20.iloc[-1] > sma_50.iloc[-1]:
                 regime_type = "TRENDING_UP"
-                strength = min(adx.iloc[-1] / 50, 1.0)
+                strength = min(adx_val / 50, 1.0)
             else:
                 regime_type = "TRENDING_DOWN"
-                strength = min(adx.iloc[-1] / 50, 1.0)
-        elif volatility.iloc[-1] > 0.4:  # Haute volatilité
+                strength = min(adx_val / 50, 1.0)
+        elif volatility is not None and isinstance(volatility, pd.Series) and len(volatility) > 0 and volatility.iloc[-1] > 0.4:
             regime_type = "VOLATILE"
             strength = min(volatility.iloc[-1], 1.0)
-        
         return MarketRegime(
             type=regime_type,
             strength=strength,
-            confidence=0.8,  # Peut être amélioré avec ML
-            volatility=volatility.iloc[-1],
+            confidence=0.8,
+            volatility=volatility.iloc[-1] if volatility is not None and isinstance(volatility, pd.Series) and len(volatility) > 0 else 0,
             volume_profile=volume_trend
         )
     
@@ -292,7 +337,7 @@ class AIEnhancedStrategy(Strategy):
         X_scaled = self.feature_scaler.fit_transform(X)
         
         # Entraîner le prédicteur de prix
-        self.price_predictor = GradientBoostingRegressor(
+        self.price_predictor = GradientBoostingClassifier(
             n_estimators=100,
             learning_rate=0.1,
             max_depth=5,
@@ -319,8 +364,10 @@ class AIEnhancedStrategy(Strategy):
             return None
         
         # 1. Identifier le régime de marché
-        self.current_regime = self._identify_market_regime(df)
-        log_debug(f"Régime: {self.current_regime.type} (force: {self.current_regime.strength:.2f})")
+        if self.current_regime is None:
+            self.current_regime = self._identify_market_regime(df)
+        regime_type = self.current_regime.type
+        log_debug(f"Régime: {regime_type} (force: {self.current_regime.strength:.2f})")
         
         # 2. Extraire les features
         features = self._extract_features(df)
@@ -329,16 +376,18 @@ class AIEnhancedStrategy(Strategy):
         ml_signal = 0
         ml_confidence = 0.5
         
-        if self.is_trained:
-            features_scaled = self.feature_scaler.transform([features])
+        if self.is_trained and self.price_predictor is not None:
+            features_scaled = self.feature_scaler.transform([features]) if self.feature_scaler else [features]
             
             # Prédiction de direction
             price_pred = self.price_predictor.predict_proba(features_scaled)[0]
             ml_signal = price_pred[1] - 0.5  # Centré sur 0
             
             # Évaluation du risque
-            risk_pred = self.risk_assessor.predict_proba(features_scaled)[0]
-            risk_score = risk_pred[1]
+            risk_score = 0.5
+            if self.risk_assessor is not None:
+                risk_pred = self.risk_assessor.predict_proba(features_scaled)[0]
+                risk_score = risk_pred[1]
             
             # Ajuster la confiance selon le risque
             ml_confidence = price_pred[1] * (1 - risk_score * 0.5)
@@ -367,18 +416,16 @@ class AIEnhancedStrategy(Strategy):
         
         # 7. Décision finale
         if final_score > 0.3 and final_confidence > 0.6:
-            # Calcul du prix d'entrée et des niveaux
-            current_price = df['close'].iloc[-1]
-            atr = talib.ATR(df['high'], df['low'], df['close']).iloc[-1]
-            
-            # Ajuster stop/target selon le régime
-            stop_distance = atr * 2
-            target_distance = atr * 3
-            
-            if self.current_regime.type == "VOLATILE":
+            current_price = df['close'].iloc[-1] if hasattr(df['close'], 'iloc') and len(df['close']) > 0 else 0
+            atr = ta.atr(df['high'], df['low'], df['close'])
+            if atr is not None and isinstance(atr, np.ndarray):
+                atr = pd.Series(atr)
+            atr_val = atr.iloc[-1] if isinstance(atr, pd.Series) and atr.notnull().sum() > 0 else 0
+            stop_distance = atr_val * 2
+            target_distance = atr_val * 3
+            if regime_type == "VOLATILE":
                 stop_distance *= 1.5
                 target_distance *= 1.5
-            
             return {
                 'action': 'BUY',
                 'confidence': final_confidence,
@@ -387,7 +434,7 @@ class AIEnhancedStrategy(Strategy):
                 'stop_loss': current_price - stop_distance,
                 'take_profit': current_price + target_distance,
                 'size_multiplier': self._calculate_position_size_multiplier(final_confidence),
-                'regime': self.current_regime.type,
+                'regime': regime_type,
                 'reason': self._generate_entry_reason(tech_signals, pattern_signal, ml_signal)
             }
         
@@ -398,21 +445,36 @@ class AIEnhancedStrategy(Strategy):
         signals = []
         
         # RSI
-        rsi = talib.RSI(df['close']).iloc[-1]
-        if rsi < 30:
+        rsi = ta.rsi(df['close'])
+        if rsi is not None and isinstance(rsi, np.ndarray):
+            rsi = pd.Series(rsi)
+        rsi_val = rsi.iloc[-1] if isinstance(rsi, pd.Series) and rsi.notnull().sum() > 0 else 0
+        if rsi_val < 30:
             signals.append({'name': 'RSI_oversold', 'score': 1.0, 'confidence': 0.9})
-        elif rsi > 70:
+        elif rsi_val > 70:
             signals.append({'name': 'RSI_overbought', 'score': -1.0, 'confidence': 0.9})
         
         # MACD
-        macd, signal, hist = talib.MACD(df['close'])
-        if hist.iloc[-1] > 0 and hist.iloc[-2] <= 0:
-            signals.append({'name': 'MACD_bullish_cross', 'score': 1.0, 'confidence': 0.8})
+        macd = ta.macd(df['close'])
+        macd_hist = None
+        if macd is not None and hasattr(macd, 'columns') and 'MACDh_12_26_9' in macd and macd['MACDh_12_26_9'] is not None:
+            macd_hist = macd['MACDh_12_26_9']
+            if isinstance(macd_hist, np.ndarray):
+                macd_hist = pd.Series(macd_hist)
+        if macd_hist is not None and macd_hist.notnull().sum() > 1:
+            if macd_hist.iloc[-1] > 0 and macd_hist.iloc[-2] <= 0:
+                signals.append({'name': 'MACD_bullish_cross', 'score': 1.0, 'confidence': 0.8})
         
         # Bollinger Bands
-        upper, middle, lower = talib.BBANDS(df['close'])
-        if df['close'].iloc[-1] < lower.iloc[-1]:
-            signals.append({'name': 'BB_oversold', 'score': 1.0, 'confidence': 0.7})
+        bb = ta.bbands(df['close'])
+        bb_lower = None
+        if bb is not None and hasattr(bb, 'columns') and 'BBL_20_2.0' in bb and bb['BBL_20_2.0'] is not None:
+            bb_lower = bb['BBL_20_2.0']
+            if isinstance(bb_lower, np.ndarray):
+                bb_lower = pd.Series(bb_lower)
+        if bb_lower is not None and bb_lower.notnull().sum() > 0:
+            if df['close'].iloc[-1] < bb_lower.iloc[-1]:
+                signals.append({'name': 'BB_oversold', 'score': 1.0, 'confidence': 0.7})
         
         # Agrégation
         if signals:
@@ -483,11 +545,12 @@ class AIEnhancedStrategy(Strategy):
         if pattern_signal['patterns']:
             reasons.append(f"Patterns: {', '.join(pattern_signal['patterns'])}")
         
-        reasons.append(f"Régime: {self.current_regime.type}")
+        if self.current_regime is not None:
+            reasons.append(f"Régime: {self.current_regime.type}")
         
         return " | ".join(reasons)
     
-    def should_exit(self, df: pd.DataFrame, position: dict) -> dict:
+    def should_exit(self, df: pd.DataFrame, position: Dict) -> Optional[Dict]:
         """
         Détermine si on doit sortir de position (logique complète)
         Args:

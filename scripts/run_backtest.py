@@ -5,7 +5,7 @@ import pandas as pd
 import ccxt
 
 from src.core.backtester import Backtester
-from src.strategies.multi_signal import MultiSignalStrategy
+from src.strategies.strategy import MultiSignalStrategy
 from src.core.logger import log_info, log_error
 
 
@@ -13,7 +13,7 @@ def load_historical_data(symbol: str, timeframe: str, limit: int = 500) -> pd.Da
     """Charge les données historiques via CCXT"""
     exchange = ccxt.binance()
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df = pd.DataFrame(ohlcv, columns=pd.Index(["timestamp", "open", "high", "low", "close", "volume"]))
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     df.set_index("timestamp", inplace=True)
     return df
@@ -46,4 +46,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    asyncio.run(main())

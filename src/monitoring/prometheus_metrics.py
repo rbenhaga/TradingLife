@@ -147,7 +147,7 @@ bot_info = Info(
 
 # ===== Décorateurs pour mesurer =====
 
-def measure_latency(metric: Histogram, labels: Dict[str, str] = None):
+def measure_latency(metric: Histogram, labels: Dict[str, str] | None = None):
     """Décorateur pour mesurer la latence d'une fonction"""
     def decorator(func):
         @wraps(func)

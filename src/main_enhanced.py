@@ -11,7 +11,7 @@ import sys
 # Ajouter le chemin src
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.enhanced_trading_bot import EnhancedTradingBot
+from core.trading_bot import TradingBot
 from core.adaptive_backtester import AdaptiveBacktester
 from strategies.ai_enhanced_strategy import AIEnhancedStrategy
 from web.modern_dashboard import ModernDashboard
@@ -53,7 +53,7 @@ async def main():
         log_info(f"🚀 Démarrage en mode {args.mode.upper()}")
         
         # Créer le bot
-        bot = EnhancedTradingBot(
+        bot = TradingBot(
             config_path=args.config,
             paper_trading=(args.mode == 'paper')
         )

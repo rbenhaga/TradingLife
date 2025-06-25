@@ -1,5 +1,5 @@
 """Web interface modules"""
 
-from .dashboard import Dashboard
+from .modern_dashboard import ModernDashboard
 
-__all__ = ['Dashboard']
+__all__ = ['ModernDashboard']

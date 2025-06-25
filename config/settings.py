@@ -4,14 +4,14 @@ Module de configuration pour le bot de trading
 
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Charger les variables d'environnement
 load_dotenv()
 
-def load_config(config_path: str = None) -> Dict[str, Any]:
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Charge la configuration depuis un fichier JSON
     
