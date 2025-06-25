@@ -17,11 +17,14 @@
     "take_profit": 0.05
   },
   "strategy": {
-    "name": "multi_signal",
+    "name": "ai_enhanced",
+    "use_ml": true,
+    "ml_confidence_threshold": 0.65,
+    "adapt_to_regime": true,
+    "timeframes": ["5m", "15m", "1h", "4h"],
     "short_window": 5,
     "long_window": 13,
     "trend_window": 50,
-    "timeframe": "15m",
     "min_data_points": 100,
     "entry_threshold": 0.5,
     "exit_threshold": -0.3

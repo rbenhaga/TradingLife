@@ -7,6 +7,7 @@ from .watchlist_scanner import WatchlistScanner
 from .risk_manager import RiskManager
 from .market_data import MarketData
 from .websocket_market_feed import WebSocketMarketFeed, DataType, MarketUpdate, OrderBookSnapshot
+from .adaptive_backtester import AdaptiveBacktester
 from .logger import log_info, log_error, log_warning, log_debug
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     'DataType',
     'MarketUpdate',
     'OrderBookSnapshot',
+    'AdaptiveBacktester',
     'log_info',
     'log_error',
     'log_warning',

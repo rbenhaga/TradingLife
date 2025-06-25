@@ -6,7 +6,7 @@ Script principal pour lancer le bot avec le dashboard web
 import asyncio
 import argparse
 from src.core.trading_bot import TradingBot
-from src.web.dashboard import Dashboard, dashboard_instance
+from src.web.modern_dashboard import ModernDashboard
 import uvicorn
 from src.core.logger import log_info, log_error
 
@@ -32,10 +32,10 @@ async def main():
         )
         
         # Initialiser le dashboard avec le bot
-        dashboard_instance.set_bot(bot)
+        dashboard_instance = ModernDashboard(bot)
         
         # Démarrer la boucle de mise à jour du dashboard
-        asyncio.create_task(dashboard_instance.start_update_loop())
+        asyncio.create_task(dashboard_instance.start_update_loop(interval=1.0))
         
         log_info(f"Dashboard disponible sur http://{args.host}:{args.port}")
         log_info("Identifiants: admin / tradingbot123")
@@ -62,4 +62,4 @@ async def main():
             await bot.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
