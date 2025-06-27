@@ -71,5 +71,11 @@
   "logging": {
     "level": "INFO",
     "file": "logs/trading.log"
+  },
+  "shutdown": {
+    "grace_period_seconds": 10,
+    "force_kill_after": 30,
+    "save_state_on_shutdown": true,
+    "close_positions_on_shutdown": false
   }
 }

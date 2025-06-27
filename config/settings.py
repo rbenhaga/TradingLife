@@ -53,7 +53,6 @@ def validate_config(config: Dict[str, Any]) -> bool:
     required_keys = {
         'exchange': ['name', 'testnet', 'api_key', 'api_secret'],
         'trading': ['pairs', 'initial_balance', 'position_size', 'max_positions'],
-        'strategy': ['name', 'short_window', 'long_window', 'timeframe'],
         'risk_management': ['max_drawdown', 'daily_loss_limit'],
         'logging': ['level', 'file']
     }
@@ -64,17 +63,20 @@ def validate_config(config: Dict[str, Any]) -> bool:
         for key in keys:
             if key not in config[section]:
                 raise ValueError(f"Clé manquante dans la configuration: {section}.{key}")
-    
+    # Spécial pour strategy: accepter timeframe OU timeframes
+    strat = config.get('strategy', {})
+    for key in ['name', 'short_window', 'long_window']:
+        if key not in strat:
+            raise ValueError(f"Clé manquante dans la configuration: strategy.{key}")
+    if 'timeframe' not in strat and 'timeframes' not in strat:
+        raise ValueError("Clé manquante dans la configuration: strategy.timeframe OU strategy.timeframes")
     # Valider les valeurs
-    if config['strategy']['short_window'] >= config['strategy']['long_window']:
+    if strat['short_window'] >= strat['long_window']:
         raise ValueError("La fenêtre courte doit être inférieure à la fenêtre longue")
-    
     if config['trading']['position_size'] > 0.1:
         raise ValueError("La taille de position ne doit pas dépasser 10%")
-    
     if not config['exchange']['api_key'] or not config['exchange']['api_secret']:
         raise ValueError("Les clés API doivent être configurées")
-    
     return True
 
 # Configuration par défaut pour les tests

@@ -95,6 +95,7 @@ class TradingBot:
         self._main_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
         self._tasks: Set[asyncio.Task] = set()
+        self._force_shutdown = False
         
         # Gestion des signaux système
         self._setup_signal_handlers()
@@ -125,12 +126,14 @@ class TradingBot:
     
     def _setup_signal_handlers(self):
         """Configure les gestionnaires de signaux système"""
-        def signal_handler(signum, frame):
-            log_warning(f"Signal {signum} reçu, arrêt en cours...")
-            asyncio.create_task(self.shutdown())
-        
+        def signal_handler(sig, frame):
+            log_info("🛑 Signal d'arrêt reçu, fermeture en cours...")
+            self._force_shutdown = True
+            self._shutdown_event.set()
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
+        if sys.platform == "win32":
+            signal.signal(signal.SIGBREAK, signal_handler)
     
     async def initialize(self) -> bool:
         """
@@ -202,14 +205,12 @@ class TradingBot:
             )
             
             # 7. Initialiser les notifications Telegram
-            telegram_config = self.config.get('telegram', {})
-            if telegram_config.get('enabled', False):
-                self.notifier = TelegramNotifier(
-                    bot_token=telegram_config['bot_token'],
-                    chat_ids=telegram_config['chat_ids']
+            self.notifier = TelegramNotifier()
+            if self.notifier.enabled:
+                await self.notifier.send_message(
+                    "🚀 Bot démarré en mode " + ("PAPER" if self.paper_trading else "LIVE"),
+                    NotificationLevel.SUCCESS
                 )
-                if await self.notifier.initialize():
-                    log_info("✅ Notifications Telegram activées")
             
             # 8. Initialiser le backtester adaptatif
             self.backtester = AdaptiveBacktester(
@@ -281,10 +282,6 @@ class TradingBot:
                 # Note: _update_orderbook n'existe pas dans MarketData, on skip pour l'instant
                 pass
             
-            # Vérifier la latence
-            if update.latency_ms > 200:
-                log_warning(f"Latence élevée détectée: {update.latency_ms:.1f}ms sur {update.symbol}")
-            
             # Incrémenter les métriques
             self.status.metrics['ws_updates'] = self.status.metrics.get('ws_updates', 0) + 1
             
@@ -318,8 +315,11 @@ class TradingBot:
     
     async def _optimization_loop(self):
         """Boucle d'optimisation automatique"""
-        while self.status.state == BotState.RUNNING:
+        while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 log_info("🔧 Début du cycle d'optimisation")
                 
                 if not self.pair_manager or not self.backtester:
@@ -356,11 +356,21 @@ class TradingBot:
                                 )
                 
                 # Attendre avant la prochaine optimisation
-                await asyncio.sleep(3600 * 6)  # 6 heures
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=3600 * 6
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
+            except asyncio.CancelledError:
+                log_debug("Optimization loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur optimisation: {e}")
-                await asyncio.sleep(3600)
+                await asyncio.sleep(5)
     
     async def start(self):
         """Démarre le bot de trading"""
@@ -471,10 +481,12 @@ class TradingBot:
     
     async def _market_scanner_task(self):
         """Tâche de scan du marché"""
-        scan_interval = self.config.get('scanner_interval', 300)  # 5 minutes par défaut
-        
+        scan_interval = self.config.get('scanner_interval', 300)
         while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 log_debug("Scan du marché en cours...")
                 
                 # Mettre à jour la watchlist
@@ -486,18 +498,30 @@ class TradingBot:
                     await self.market_data.update_all()
                 
                 # Attendre avant le prochain scan
-                await asyncio.sleep(scan_interval)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=scan_interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
+            except asyncio.CancelledError:
+                log_debug("Market scanner loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur dans market scanner: {str(e)}")
-                await asyncio.sleep(60)  # Attendre 1 minute en cas d'erreur
+                await asyncio.sleep(5)
     
     async def _strategy_loop(self):
         """Boucle d'exécution des stratégies"""
-        interval = self.config.get('strategy_interval', 60)  # 1 minute par défaut
-        
-        while self.status.state == BotState.RUNNING and not self._shutdown_event.is_set():
+        interval = self.config.get('strategy_interval', 60)
+        while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 log_debug("Exécution de la boucle de stratégie...")
                 
                 # Vérifier que tous les composants sont prêts
@@ -555,21 +579,30 @@ class TradingBot:
                     log_debug("État du bot sauvegardé")
                 
                 # Attendre avant la prochaine itération
-                await asyncio.sleep(interval)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
             except asyncio.CancelledError:
-                log_info("Boucle de stratégie annulée")
-                raise
+                log_debug("Stratégie loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur dans strategy loop: {str(e)}")
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
     
     async def _risk_monitor_loop(self):
         """Boucle de surveillance des risques"""
-        interval = 30  # 30 secondes
-        
-        while self.status.state == BotState.RUNNING and not self._shutdown_event.is_set():
+        interval = 30
+        while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 if not self.risk_manager:
                     await asyncio.sleep(interval)
                     continue
@@ -589,7 +622,7 @@ class TradingBot:
                         if self.notifier:
                             await self.notifier.send_message(
                                 "🚨 ALERTE CRITIQUE: Drawdown > 20% - Trading mis en pause",
-                                NotificationLevel.ERROR
+                                NotificationLevel.ALERT
                             )
                 
                 if risk_metrics.daily_pnl < -0.05:  # Perte quotidienne > 5%
@@ -607,18 +640,30 @@ class TradingBot:
                                 position['stop_loss'] = new_stop
                                 log_debug(f"Trailing stop mis à jour pour {symbol}: {new_stop:.2f}")
                 
-                await asyncio.sleep(interval)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
+            except asyncio.CancelledError:
+                log_debug("Risk monitor loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur dans risk monitor: {str(e)}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(5)
     
     async def _performance_tracker_loop(self):
         """Boucle de suivi des performances"""
-        interval = 300  # 5 minutes
-        
-        while self.status.state == BotState.RUNNING and not self._shutdown_event.is_set():
+        interval = 300
+        while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 if not self.pair_manager:
                     await asyncio.sleep(interval)
                     continue
@@ -649,11 +694,21 @@ class TradingBot:
                 if self.notifier and datetime.now().hour == 18 and datetime.now().minute < 5:
                     await self._send_daily_summary()
                 
-                await asyncio.sleep(interval)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
+            except asyncio.CancelledError:
+                log_debug("Performance tracker loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur dans performance tracker: {str(e)}")
-                await asyncio.sleep(interval)
+                await asyncio.sleep(5)
     
     async def _send_daily_summary(self):
         """Envoie le résumé quotidien via Telegram"""
@@ -689,10 +744,12 @@ class TradingBot:
     
     async def _health_check_loop(self):
         """Boucle de vérification de santé"""
-        interval = 60  # 1 minute
-        
-        while self.status.state == BotState.RUNNING and not self._shutdown_event.is_set():
+        interval = 60
+        while not self._shutdown_event.is_set():
             try:
+                if self.status.state != BotState.RUNNING:
+                    await asyncio.sleep(1)
+                    continue
                 # Vérifier la connexion WebSocket
                 if self.websocket_feed:
                     ws_metrics = self.websocket_feed.get_metrics()
@@ -719,11 +776,21 @@ class TradingBot:
                 # Réinitialiser les compteurs quotidiens si nouveau jour
                 await self._check_daily_reset()
                 
-                await asyncio.sleep(interval)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 
+            except asyncio.CancelledError:
+                log_debug("Health check loop annulée")
+                break
             except Exception as e:
                 log_error(f"Erreur dans health check: {str(e)}")
-                await asyncio.sleep(interval)
+                await asyncio.sleep(5)
     
     async def _pause_trading(self):
         """Met en pause le trading (garde la surveillance active)"""
@@ -802,41 +869,27 @@ class TradingBot:
             log_error(f"Erreur sauvegarde état: {str(e)}")
     
     async def shutdown(self):
-        """Arrête proprement le bot"""
-        log_info("Arrêt du bot en cours...")
-        
-        # Marquer l'arrêt
+        """Arrêt propre du bot"""
+        log_info("🔴 Début de l'arrêt du bot...")
         self._shutdown_event.set()
-        
-        # Annuler la tâche principale
-        if self._main_task and not self._main_task.done():
-            self._main_task.cancel()
-            try:
-                await self._main_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Annuler toutes les autres tâches
+        self.status.state = BotState.STOPPING
+        if self.websocket_feed:
+            log_info("Fermeture des connexions WebSocket...")
+            await self.websocket_feed.disconnect()
+        log_info(f"Annulation de {len(self._tasks)} tâches...")
         for task in self._tasks:
             if not task.done():
                 task.cancel()
-        
-        # Attendre que toutes les tâches soient terminées
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-        
-        # Fermer les connexions
-        if self.websocket_feed:
-            await self.websocket_feed.disconnect()
-        
-        if self.exchange:
-            await self.exchange.close()
-            
-        if self.notifier and hasattr(self.notifier, 'close'):
-            await self.notifier.close()
-        
+        await self._save_state()
+        if self.notifier and self.notifier.enabled:
+            await self.notifier.send_message(
+                "🔴 Bot arrêté",
+                NotificationLevel.INFO
+            )
         self.status.state = BotState.STOPPED
-        log_info("Bot arrêté avec succès")
+        log_info("✅ Bot arrêté proprement")
     
     def get_status(self) -> Dict:
         """Retourne l'état actuel du bot"""

@@ -15,6 +15,7 @@ import aiohttp
 from enum import Enum
 
 from .logger import log_info, log_error, log_warning, log_debug
+from .latency_monitor import LatencyMonitor
 
 class DataType(Enum):
     """Types de données supportés"""
@@ -106,6 +107,9 @@ class WebSocketMarketFeed:
         self._heartbeat_task = None
         self._receive_task = None
         self._subscription_task = None
+
+        # Ajout du suivi de latence
+        self.latency_monitor = LatencyMonitor()
 
         log_info(f"WebSocketMarketFeed initialisé - Exchange: {exchange}, Testnet: {testnet}")
 
@@ -451,9 +455,9 @@ class WebSocketMarketFeed:
                 # Appeler les callbacks
                 await self._dispatch_callbacks(symbol, market_update)
                 
-                # Log si latence élevée
+                # Suivi latence uniquement via LatencyMonitor (plus de log direct)
                 if latency_ms > 200:
-                    log_warning(f"Latence élevée détectée: {latency_ms:.1f}ms pour {symbol}")
+                    self.latency_monitor.add_latency(symbol, latency_ms)
         
         except Exception as e:
             log_error(f"Erreur traitement message: {e}")

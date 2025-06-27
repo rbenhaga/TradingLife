@@ -78,8 +78,8 @@ class ExchangeConnector:
                 if self.exchange_name == 'binance':
                     config['urls'] = {
                         'api': {
-                            'public': 'https://testnet.binance.vision/api/v3',
-                            'private': 'https://testnet.binance.vision/api/v3',
+                            'public': 'https://testnet.binance.vision/api',
+                            'private': 'https://testnet.binance.vision/api',
                         }
                     }
                 elif self.exchange_name == 'bybit':

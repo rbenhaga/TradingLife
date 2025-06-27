@@ -42,15 +42,24 @@ cp .env.example .env
 
 ## 📖 Usage
 
-### Mode Paper Trading (Test)
+### Lancer le bot en mode Paper Trading (simulation)
 ```bash
-python run_bot.py --paper
+python run_enhanced.py --mode paper
 ```
 
-### Mode Trading Réel
+### Lancer le bot en mode Trading Réel
 ```bash
-python run_bot.py --real
+python run_enhanced.py --mode live
 ```
+
+### Désactiver le dashboard web
+```bash
+python run_enhanced.py --mode paper --no-dashboard
+```
+
+### Interface Web (Dashboard)
+- Par défaut, le dashboard est lancé avec le bot sur http://localhost:8000
+- Pour ne lancer que le dashboard, utilisez le script dédié si besoin (voir src/web/modern_dashboard.py)
 
 ### Lancer un Backtest
 ```bash
@@ -60,12 +69,6 @@ python scripts/run_backtest.py --symbol BTC/USDT --days 30
 ### Optimiser les Paramètres
 ```bash
 python scripts/optimize_weights.py --symbol BTC/USDT --trials 100
-```
-
-### Interface Web
-```bash
-python src/web/dashboard.py
-# Ouvrir http://localhost:5000
 ```
 
 ## 📊 Stratégies Disponibles

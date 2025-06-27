@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import json
 import asyncio
+import os
 
 from src.exchanges.exchange_connector import ExchangeConnector
 from src.core.weight_optimizer import WeightOptimizer
@@ -36,6 +37,14 @@ Exemples:
     )
     
     # Arguments...
+    parser.add_argument('--symbol', type=str, help='Symbole à optimiser (ex: BTC/USDT)')
+    parser.add_argument('--symbols', nargs='+', help='Liste de paires à optimiser')
+    parser.add_argument('--trials', type=int, default=100, help="Nombre d'essais d'optimisation")
+    parser.add_argument('--metric', type=str, default='sharpe_ratio', help='Métrique à optimiser (sharpe_ratio, profit_factor, etc)')
+    parser.add_argument('--days', type=int, default=90, help="Nombre de jours d'historique à utiliser")
+    parser.add_argument('--capital', type=float, default=10000, help='Capital initial pour le backtest')
+    parser.add_argument('--testnet', action='store_true', help='Utiliser le testnet Binance')
+    parser.add_argument('--save-config', action='store_true', help='Sauvegarder la configuration optimale')
     
     args = parser.parse_args()
     
@@ -49,6 +58,8 @@ Exemples:
     
     # Charger les variables d'environnement
     load_dotenv()
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
     
     print("\n" + "="*60)
     print("🧬 OPTIMISATION DES POIDS DES INDICATEURS")
@@ -66,12 +77,11 @@ Exemples:
             exchange_name='binance',
             testnet=args.testnet
         )
-        
-        # Initialiser la connexion
-        await exchange.connect()
+        await exchange.connect(api_key=api_key, api_secret=api_secret)
         
         # Créer l'optimiseur
-        optimizer = WeightOptimizer(exchange)
+        optimizer = WeightOptimizer(testnet=args.testnet)
+        optimizer.exchange = exchange
         optimizer.optimization_metric = args.metric
         
         # Calculer les dates
@@ -105,7 +115,7 @@ Exemples:
             # Optimisation simple
             logger.info(f"🔄 Optimisation de {args.symbol}...")
             
-            result = optimizer.optimize(
+            result = await optimizer.optimize(
                 symbol=args.symbol,
                 start_date=start_date,
                 end_date=end_date,

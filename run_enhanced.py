@@ -7,13 +7,15 @@ import asyncio
 import argparse
 from pathlib import Path
 import sys
+import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.trading_bot import TradingBot
 from src.web.modern_dashboard import ModernDashboard
 from src.core.logger import log_info, log_error
 
+npNaN = np.nan
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -36,14 +38,34 @@ async def main():
         await bot._optimization_loop()  # Une seule itération
     
     # Dashboard moderne
-    dashboard = ModernDashboard(bot)
+    # dashboard = ModernDashboard(bot)
     
     # Démarrer tout
     await asyncio.gather(
         bot.start(),
-        dashboard.run()
+        run_dashboard(bot)
     )
 
+async def run_dashboard(bot):
+    """Lance le dashboard dans un thread séparé"""
+    import uvicorn
+    from src.web.modern_dashboard import ModernDashboard
+
+    dashboard = ModernDashboard(bot)
+    config = uvicorn.Config(
+        dashboard.app,
+        host="127.0.0.1",  # Changé de 0.0.0.0
+        port=8000,
+        log_level="warning"  # Réduire le spam de logs
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Arrêt du bot")
+    except Exception as e:
+        print(f"❌ Erreur fatale: {e}")
+        sys.exit(1)

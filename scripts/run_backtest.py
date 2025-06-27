@@ -3,6 +3,9 @@
 import argparse
 import pandas as pd
 import ccxt
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.backtester import Backtester
 from src.strategies.strategy import MultiSignalStrategy

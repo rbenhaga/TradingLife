@@ -499,7 +499,7 @@ class ModernDashboard:
 </html>
 """
 
-    async def run(self, host: str = "0.0.0.0", port: int = 8000):
+    async def run(self, host: str = "127.0.0.0", port: int = 8000):
         """
         Lance le serveur FastAPI pour le dashboard.
         """

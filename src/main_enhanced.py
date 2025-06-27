@@ -1,92 +1,121 @@
-# src/main_enhanced.py
-"""
-Point d'entrée principal avec toutes les améliorations
-"""
+#!/usr/bin/env python3
+# run_enhanced.py
 
 import asyncio
 import argparse
-from pathlib import Path
+import logging
 import sys
+import signal
+from pathlib import Path
+from dotenv import load_dotenv
 
-# Ajouter le chemin src
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.trading_bot import TradingBot
-from core.adaptive_backtester import AdaptiveBacktester
-from strategies.ai_enhanced_strategy import AIEnhancedStrategy
-from web.modern_dashboard import ModernDashboard
-from notifications.telegram_notifier import TelegramNotifier
-from core.logger import log_info, log_error
+from src.core.trading_bot import TradingBot
+from src.core.logger import log_info, log_error
 
+# Variable globale pour le bot
+bot_instance = None
+dashboard_task = None
+
+async def shutdown(loop):
+    """Arrêt propre de l'application"""
+    log_info("🛑 Arrêt demandé...")
+    
+    # Arrêter le bot
+    if bot_instance:
+        await bot_instance.shutdown()
+    
+    # Arrêter le dashboard
+    if dashboard_task and not dashboard_task.done():
+        dashboard_task.cancel()
+        try:
+            await dashboard_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Arrêter toutes les tâches restantes
+    tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task()]
+    for task in tasks:
+        task.cancel()
+    
+    await asyncio.gather(*tasks, return_exceptions=True)
+    loop.stop()
+
+def handle_exception(loop, context):
+    """Gestionnaire d'exceptions"""
+    exception = context.get('exception')
+    if isinstance(exception, asyncio.CancelledError):
+        return
+    log_error(f"Exception: {context}")
+
+async def run_dashboard():
+    """Lance le dashboard"""
+    try:
+        import uvicorn
+        from src.web.modern_dashboard import ModernDashboard
+        dashboard = ModernDashboard(bot_instance)
+        config = uvicorn.Config(
+            dashboard.app,
+            host="127.0.0.1",
+            port=8000,
+            log_level="warning",
+            loop="asyncio"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+    except asyncio.CancelledError:
+        log_info("Dashboard arrêté")
 
 async def main():
-    parser = argparse.ArgumentParser(description="Trading Bot Avancé avec IA")
-    parser.add_argument('--mode', choices=['backtest', 'optimize', 'live', 'paper'], 
-                       default='paper', help='Mode de fonctionnement')
-    parser.add_argument('--config', default='config/config.json', 
-                       help='Fichier de configuration')
-    parser.add_argument('--pairs', nargs='+', default=['BTC/USDT', 'ETH/USDT'], 
-                       help='Paires à trader')
+    """Fonction principale"""
+    global bot_instance, dashboard_task
     
+    parser = argparse.ArgumentParser(description='Enhanced Trading Bot')
+    parser.add_argument('--mode', choices=['paper', 'live'], default='paper')
+    parser.add_argument('--no-dashboard', action='store_true', 
+                       help='Désactiver le dashboard')
     args = parser.parse_args()
     
-    if args.mode == 'optimize':
-        # Mode optimisation
-        log_info("🔧 Mode Optimisation Adaptive")
-        
-        backtester = AdaptiveBacktester()
-        
-        for pair in args.pairs:
-            log_info(f"Optimisation de {pair}...")
-            
-            # Charger les données historiques
-            # data = await load_historical_data(pair, days=180)
-            
-            # Optimisation adaptive
-            # results = await backtester.adaptive_optimization(pair, data)
-            
-            # Sauvegarder les résultats
-            # backtester.save_optimization_results(f"optimization_{pair}.json")
+    load_dotenv()
     
-    elif args.mode in ['live', 'paper']:
-        # Mode trading
-        log_info(f"🚀 Démarrage en mode {args.mode.upper()}")
-        
-        # Créer le bot
-        bot = TradingBot(
-            config_path=args.config,
-            paper_trading=(args.mode == 'paper')
-        )
-        
-        # Initialiser
-        if not await bot.initialize():
+    # Configuration du logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Créer le bot
+    bot_instance = TradingBot(paper_trading=(args.mode == 'paper'))
+    
+    try:
+        # Initialiser le bot
+        if not await bot_instance.initialize():
             log_error("Échec de l'initialisation")
             return
         
-        # Configurer les notifications Signal
-        notifier = TelegramNotifier(
-            bot_token="", # A AJOUTER !
-            chat_ids=[]
-        )
+        # Lancer le dashboard
+        if not args.no_dashboard:
+            dashboard_task = asyncio.create_task(run_dashboard())
+            log_info("📊 Dashboard: http://localhost:8000")
         
-        if await notifier.initialize():
-            bot.notifier = notifier
-            log_info("✅ Notifications Signal configurées")
+        # Démarrer le bot
+        await bot_instance.start()
         
-        # Démarrer le dashboard
-        dashboard = ModernDashboard(bot)
-
-        # Optimisation initiale si demandée
-        if args.optimize_first:
-            log_info("🔧 Optimisation initiale...")
-            await bot._optimization_loop()  # Une seule itération
-
+        # Attendre l'arrêt
+        await bot_instance._shutdown_event.wait()
         
-        # Lancer en parallèle
-        await asyncio.gather(
-            bot.start(),
-            dashboard.run()
-        )
+    except KeyboardInterrupt:
+        log_info("⌨️  Interruption clavier détectée")
+    finally:
+        await shutdown(asyncio.get_event_loop())
+        print("✅ Arrêt propre terminé.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Arrêt du bot")
+    except Exception as e:
+        print(f"❌ Erreur fatale: {e}")
+        sys.exit(1)

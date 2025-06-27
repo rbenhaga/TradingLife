@@ -4,6 +4,7 @@ Système de notifications Telegram simplifié
 
 import asyncio
 import aiohttp
+import os
 from typing import List, Dict, Optional
 from datetime import datetime
 from enum import Enum
@@ -13,54 +14,62 @@ from ..core.logger import log_info, log_error
 
 class NotificationLevel(Enum):
     INFO = "ℹ️"
-    SUCCESS = "✅"
     WARNING = "⚠️"
-    ERROR = "❌"
-    TRADE = "💰"
-    ANALYSIS = "📊"
+    ALERT = "🚨"
+    SUCCESS = "✅"
+    TRADE = "📊"
 
 
 class TelegramNotifier:
     """Gestionnaire de notifications Telegram"""
     
-    def __init__(self, bot_token: str, chat_ids: List[str]):
-        self.bot_token = bot_token
-        self.chat_ids = chat_ids
-        self.api_url = f"https://api.telegram.org/bot{bot_token}"
-        self.session = None
+    def __init__(self):
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.enabled = bool(self.bot_token and self.chat_id)
         
-    async def initialize(self):
-        """Initialise la session HTTP"""
-        self.session = aiohttp.ClientSession()
-        # Test de connexion
-        try:
-            await self.send_message("🚀 Bot de trading connecté!", NotificationLevel.INFO)
-            return True
-        except Exception as e:
-            log_error(f"Erreur init Telegram: {e}")
-            return False
+        if not self.enabled:
+            print("⚠️ Telegram non configuré - Ajoutez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID au .env")
     
-    async def send_message(self, text: str, level: NotificationLevel = NotificationLevel.INFO):
-        """Envoie un message formaté"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
-        formatted_text = f"{level.value} {text}"
+    async def send_message(self, message: str, level: NotificationLevel = NotificationLevel.INFO):
+        """Envoie un message via Telegram"""
+        if not self.enabled:
+            return
+            
+        # Formater le message
+        formatted_message = f"{level.value} *TradingLife Bot*\n\n{message}\n\n_{datetime.now().strftime('%H:%M:%S')}_"
         
-        for chat_id in self.chat_ids:
-            try:
-                url = f"{self.api_url}/sendMessage"
-                data = {
-                    'chat_id': chat_id,
-                    'text': formatted_text,
-                    'parse_mode': 'HTML'
-                }
-                
-                async with self.session.post(url, json=data) as response:
-                    if response.status != 200:
-                        log_error(f"Erreur Telegram: {await response.text()}")
-                        
-            except Exception as e:
-                log_error(f"Erreur envoi message: {e}")
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            'chat_id': self.chat_id,
+            'text': formatted_message,
+            'parse_mode': 'Markdown'
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        print(f"Erreur Telegram: {await resp.text()}")
+        except Exception as e:
+            print(f"Erreur envoi Telegram: {e}")
+    
+    async def send_trade_notification(self, trade_info: dict):
+        """Notification spéciale pour les trades"""
+        emoji = "🟢" if trade_info['side'] == 'BUY' else "🔴"
+        
+        message = f"""
+{emoji} *TRADE EXÉCUTÉ*
+
+📈 *Paire:* {trade_info['symbol']}
+💰 *Type:* {trade_info['side']}
+💵 *Prix:* ${trade_info['price']:.2f}
+📊 *Quantité:* {trade_info['amount']}
+🎯 *Raison:* {trade_info.get('reason', 'Signal détecté')}
+
+📊 *P&L Total:* ${trade_info.get('total_pnl', 0):.2f}
+"""
+        await self.send_message(message, NotificationLevel.TRADE)
     
     async def notify_trade(self, trade: Dict):
         """Notifie un trade"""
@@ -89,7 +98,7 @@ class TelegramNotifier:
 📉 <b>Max Drawdown:</b> {summary['max_drawdown']:.1f}%
 ⚡ <b>Sharpe Ratio:</b> {summary['sharpe_ratio']:.2f}
 """
-        await self.send_message(message, NotificationLevel.ANALYSIS)
+        await self.send_message(message, NotificationLevel.TRADE)
     
     async def close(self):
         """Ferme la session"""
