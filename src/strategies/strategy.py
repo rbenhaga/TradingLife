@@ -8,7 +8,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from ..core.logger import log_info, log_debug, log_warning, log_error
-from ..core.weighted_score_engine import WeightedScoreEngine, TradingScore
+from ..core.weighted_score_engine import WeightedScoreEngine
 
 class Strategy(ABC):
     """Classe de base améliorée pour les stratégies de trading"""

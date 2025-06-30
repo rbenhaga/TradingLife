@@ -23,7 +23,6 @@ sys.path.insert(0, str(root_dir))
 from src.core.logger import log_info, log_error, log_debug, log_warning, log_trade
 from src.core.multi_pair_manager import MultiPairManager
 from src.core.watchlist_scanner import WatchlistScanner
-from src.core.weighted_score_engine import WeightedScoreEngine
 from src.core.risk_manager import RiskManager
 from src.core.market_data import MarketData
 from src.core.websocket_market_feed import WebSocketMarketFeed, DataType, MarketUpdate
@@ -32,6 +31,9 @@ from src.strategies.ai_enhanced_strategy import AIEnhancedStrategy
 from src.notifications.telegram_notifier import TelegramNotifier, NotificationLevel
 from src.core.adaptive_backtester import AdaptiveBacktester
 from config.settings import load_config, validate_config
+from src.core.fast_market_buffer import FastMarketBuffer
+from src.core.optimized_weighted_score_engine import OptimizedWeightedScoreEngine
+from src.monitoring.prometheus_metrics import PrometheusExporter, measure_latency, decision_latency
 
 
 class BotState(Enum):
@@ -72,6 +74,9 @@ class TradingBot:
         # Configuration
         self.config = self._load_and_validate_config(config_path)
         self.paper_trading = paper_trading
+        self.market_buffer = FastMarketBuffer(max_symbols=100)
+        self.optimized_score_engine = OptimizedWeightedScoreEngine()
+        self.metrics_exporter = None
         
         # État du bot
         self.status = BotStatus(
@@ -142,6 +147,13 @@ class TradingBot:
         Returns:
             True si l'initialisation réussit
         """
+        try:
+            self.metrics_exporter = PrometheusExporter(port=8000)
+            self.metrics_exporter.start()
+            log_info("✅ Prometheus démarré sur port 8000")
+        except Exception as e:
+            log_error(f"Erreur Prometheus: {e}")
+            
         try:
             log_info("Initialisation des composants...")
             

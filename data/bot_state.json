@@ -1,9 +1,9 @@
 {
-  "timestamp": "2025-06-27T11:07:15.727110",
-  "state": "running",
+  "timestamp": "2025-06-30T13:17:36.929603",
+  "state": "stopping",
   "total_trades": 0,
   "open_positions": 0,
-  "total_pnl": 0,
+  "total_pnl": 0.0,
   "daily_pnl": 0.0,
   "positions": {},
   "errors": []

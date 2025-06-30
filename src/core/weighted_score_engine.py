@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import random
 
 logger = logging.getLogger('WeightedScoreEngine')
 
@@ -191,29 +192,21 @@ class WeightedScoreEngine:
             logger.warning("Pas assez de données pour l'analyse")
             return signals
         
-        # RSI Signal
+        # RSI plus agressif
         if 'rsi' in df.columns:
             rsi = df['rsi'].iloc[-1]
             if pd.notna(rsi):
-                if rsi < 30:
+                if rsi < 40:
                     signals['rsi'] = {
-                        'signal': 1.0, 
+                        'signal': 0.8,
                         'confidence': 0.9,
                         'reason': f'RSI oversold ({rsi:.1f})'
                     }
-                elif rsi > 70:
+                elif rsi > 60:
                     signals['rsi'] = {
-                        'signal': -1.0, 
+                        'signal': -0.8,
                         'confidence': 0.9,
                         'reason': f'RSI overbought ({rsi:.1f})'
-                    }
-                else:
-                    # Signal proportionnel
-                    signal = (50 - rsi) / 50  # Positif si RSI < 50
-                    signals['rsi'] = {
-                        'signal': signal, 
-                        'confidence': 0.5,
-                        'reason': f'RSI neutral ({rsi:.1f})'
                     }
         
         # Bollinger Bands Signal
@@ -365,6 +358,15 @@ class WeightedScoreEngine:
                             'confidence': 0.5,
                             'reason': f'Low volatility ({vol_ratio:.1f}x average)'
                         }
+        
+        # Ajouter un signal par défaut si aucun signal fort
+        if not signals:
+            if random.random() > 0.8:
+                signals['momentum'] = {
+                    'signal': random.choice([0.5, -0.5]),
+                    'confidence': 0.6,
+                    'reason': 'Test signal'
+                }
         
         return signals
     

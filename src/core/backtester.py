@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - optional dependency
     ray = None
 
 from .logger import log_info, log_error, log_debug
-from .weighted_score_engine import WeightedScoreEngine, TradingScore
+from .optimized_weighted_score_engine import OptimizedWeightedScoreEngine
 from ..strategies.strategy import Strategy, MultiSignalStrategy
 
 @dataclass
@@ -105,9 +105,9 @@ class Backtester:
         """
         # Filtrer les données par date si nécessaire
         if start_date:
-            data = data[data.index >= start_date]
+            data = data.loc[data.index >= start_date]
         if end_date:
-            data = data[data.index <= end_date]
+            data = data.loc[data.index <= end_date]
         
         eng = engine or self.engine
         log_info(f"Début du backtest sur {len(data)} périodes (engine={eng})")
@@ -252,6 +252,12 @@ class Backtester:
         
         # Convertir en DataFrame
         trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
+        # Correction : synchroniser la longueur de equity_curve et signals.index
+        if len(equity_curve) > len(signals.index):
+            equity_curve = equity_curve[:len(signals.index)]
+        elif len(equity_curve) < len(signals.index):
+            # Si jamais il manque un point, on répète le dernier capital
+            equity_curve += [equity_curve[-1]] * (len(signals.index) - len(equity_curve))
         self.equity_curve = pd.Series(equity_curve, index=signals.index)
 
         return trades_df
@@ -290,7 +296,8 @@ class Backtester:
         Returns:
             BacktestResult avec toutes les métriques
         """
-        final_capital = self.equity_curve.iloc[-1]
+        eq_curve = self.equity_curve if isinstance(self.equity_curve, pd.Series) else pd.Series(self.equity_curve)
+        final_capital = float(eq_curve.iloc[-1])
         total_return = final_capital - self.initial_capital
         total_return_pct = (total_return / self.initial_capital) * 100
         
@@ -316,7 +323,7 @@ class Backtester:
                 best_trade=0,
                 worst_trade=0,
                 avg_trade_duration=0,
-                equity_curve=self.equity_curve,
+                equity_curve=self.equity_curve if isinstance(self.equity_curve, pd.Series) else pd.Series(self.equity_curve),
                 trades=trades_df,
                 metrics={}
             )
@@ -333,18 +340,18 @@ class Backtester:
         profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
         
         # Moyennes
-        avg_win = winning_trades['net_pnl'].mean() if len(winning_trades) > 0 else 0
-        avg_loss = losing_trades['net_pnl'].mean() if len(losing_trades) > 0 else 0
+        avg_win = float(winning_trades['net_pnl'].mean()) if len(winning_trades) > 0 else 0.0
+        avg_loss = float(losing_trades['net_pnl'].mean()) if len(losing_trades) > 0 else 0.0
         
         # Meilleur/pire trade
-        best_trade = trades_df['net_pnl'].max() if total_trades > 0 else 0
-        worst_trade = trades_df['net_pnl'].min() if total_trades > 0 else 0
+        best_trade = float(trades_df['net_pnl'].max()) if total_trades > 0 else 0.0
+        worst_trade = float(trades_df['net_pnl'].min()) if total_trades > 0 else 0.0
         
         # Durée moyenne
-        avg_trade_duration = trades_df['duration'].mean() if total_trades > 0 else 0
+        avg_trade_duration = float(trades_df['duration'].mean()) if total_trades > 0 else 0.0
         
         # Calcul du Sharpe Ratio
-        returns = self.equity_curve.pct_change().dropna()
+        returns = self.equity_curve.pct_change().dropna() if isinstance(self.equity_curve, pd.Series) else pd.Series(self.equity_curve).pct_change().dropna()
         if len(returns) > 0 and returns.std() > 0:
             sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252 * 24)  # Annualisé
         else:
@@ -358,9 +365,9 @@ class Backtester:
             sortino_ratio = 0
         
         # Calcul du Maximum Drawdown
-        peak = self.equity_curve.expanding().max()
-        drawdown = (self.equity_curve - peak) / peak
-        max_drawdown = drawdown.min() * 100
+        peak = self.equity_curve.expanding().max() if isinstance(self.equity_curve, pd.Series) else pd.Series(self.equity_curve).expanding().max()
+        drawdown = (self.equity_curve - peak) / peak if isinstance(self.equity_curve, pd.Series) else (pd.Series(self.equity_curve) - peak) / peak
+        max_drawdown = float(drawdown.min()) * 100
         
         # Durée du max drawdown
         drawdown_duration = 0
@@ -376,12 +383,12 @@ class Backtester:
         
         # Métriques additionnelles
         metrics = {
-            'calmar_ratio': abs(total_return_pct / max_drawdown) if max_drawdown != 0 else 0,
-            'avg_trade_return': trades_df['return_pct'].mean() if total_trades > 0 else 0,
-            'trade_return_std': trades_df['return_pct'].std() if total_trades > 0 else 0,
-            'max_consecutive_wins': self._max_consecutive(winning_trades),
-            'max_consecutive_losses': self._max_consecutive(losing_trades),
-            'exposure_time': (total_trades * avg_trade_duration) / (len(self.equity_curve) * 24) if len(self.equity_curve) > 0 else 0
+            'calmar_ratio': float(abs(total_return_pct / max_drawdown)) if max_drawdown != 0 else 0.0,
+            'avg_trade_return': float(trades_df['return_pct'].mean()) if total_trades > 0 else 0.0,
+            'trade_return_std': float(trades_df['return_pct'].std()) if total_trades > 0 else 0.0,
+            'max_consecutive_wins': float(self._max_consecutive(winning_trades if isinstance(winning_trades, pd.DataFrame) else winning_trades.to_frame())),
+            'max_consecutive_losses': float(self._max_consecutive(losing_trades if isinstance(losing_trades, pd.DataFrame) else losing_trades.to_frame())),
+            'exposure_time': float((total_trades * avg_trade_duration) / (len(self.equity_curve) * 24)) if len(self.equity_curve) > 0 else 0.0
         }
         
         return BacktestResult(
@@ -403,7 +410,7 @@ class Backtester:
             best_trade=best_trade,
             worst_trade=worst_trade,
             avg_trade_duration=avg_trade_duration,
-            equity_curve=self.equity_curve,
+            equity_curve=self.equity_curve if isinstance(self.equity_curve, pd.Series) else pd.Series(self.equity_curve),
             trades=trades_df,
             metrics=metrics
         )
@@ -412,7 +419,8 @@ class Backtester:
         """Calculate metrics using vectorbt Portfolio object"""
         equity_curve = pf.value()
 
-        final_capital = equity_curve.iloc[-1]
+        eq_curve = equity_curve if isinstance(equity_curve, pd.Series) else pd.Series(equity_curve)
+        final_capital = float(eq_curve.iloc[-1])
         total_return = final_capital - self.initial_capital
         total_return_pct = (total_return / self.initial_capital) * 100
 
@@ -429,7 +437,7 @@ class Backtester:
             else 0
         )
 
-        max_drawdown = ((equity_curve / equity_curve.cummax()) - 1).min() * 100
+        max_drawdown = float(((equity_curve / equity_curve.cummax()) - 1).min()) * 100
 
         trades = pf.trades
         pnl = trades.pnl
@@ -442,16 +450,16 @@ class Backtester:
             if losing_trades > 0
             else float("inf")
         )
-        avg_win = pnl[pnl > 0].mean() if winning_trades > 0 else 0
-        avg_loss = pnl[pnl <= 0].mean() if losing_trades > 0 else 0
-        best_trade = pnl.max() if total_trades > 0 else 0
-        worst_trade = pnl.min() if total_trades > 0 else 0
-        avg_trade_duration = trades.duration.mean() if total_trades > 0 else 0
+        avg_win = float(pnl[pnl > 0].mean()) if winning_trades > 0 else 0.0
+        avg_loss = float(pnl[pnl <= 0].mean()) if losing_trades > 0 else 0.0
+        best_trade = float(pnl.max()) if total_trades > 0 else 0.0
+        worst_trade = float(pnl.min()) if total_trades > 0 else 0.0
+        avg_trade_duration = float(trades.duration.mean()) if total_trades > 0 else 0.0
 
         metrics = {
-            "calmar_ratio": abs(total_return_pct / max_drawdown)
+            "calmar_ratio": float(abs(total_return_pct / max_drawdown))
             if max_drawdown != 0
-            else 0
+            else 0.0
         }
 
         return BacktestResult(

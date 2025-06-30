@@ -99,8 +99,3 @@ class TelegramNotifier:
 ⚡ <b>Sharpe Ratio:</b> {summary['sharpe_ratio']:.2f}
 """
         await self.send_message(message, NotificationLevel.TRADE)
-    
-    async def close(self):
-        """Ferme la session"""
-        if self.session:
-            await self.session.close()
